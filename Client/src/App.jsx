@@ -1,31 +1,44 @@
 import { useState } from 'react'
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { jwtDecode } from 'jwt-decode'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
+import Editor from './pages/Editor'
 
 function App() {
-  const [page, setPage] = useState('login')
   const [token, setToken] = useState(localStorage.getItem('token'))
+  const navigate = useNavigate()
+
+  const getUsername = () => {
+    try {
+      return jwtDecode(token).user?.username || 'user'
+    } catch {
+      return 'user'
+    }
+  }
 
   const handleLogin = (token) => {
     localStorage.setItem('token', token)
     setToken(token)
-    setPage('dashboard')
+    navigate('/dashboard')
   }
 
   const handleLogout = () => {
     localStorage.removeItem('token')
     setToken(null)
-    setPage('login')
+    navigate('/login')
   }
 
-  if (token) return <Dashboard onLogout={handleLogout} />
-
-  if (page === 'login')
-    return <Login onLogin={handleLogin} onGoRegister={() => setPage('register')} />
-
-  if (page === 'register')
-    return <Register onGoLogin={() => setPage('login')} />
+  return (
+    <Routes>
+      <Route path="/login" element={!token ? <Login onLogin={handleLogin} /> : <Navigate to="/dashboard" />} />
+      <Route path="/register" element={!token ? <Register /> : <Navigate to="/dashboard" />} />
+      <Route path="/dashboard" element={token ? <Dashboard onLogout={handleLogout} username={getUsername()} /> : <Navigate to="/login" />} />
+      <Route path="/editor/:roomId" element={token ? <Editor username={getUsername()} /> : <Navigate to="/login" />} />
+      <Route path="*" element={<Navigate to={token ? '/dashboard' : '/login'} />} />
+    </Routes>
+  )
 }
 
 export default App

@@ -17,3 +17,12 @@ export async function registerUser(username, password) {
   });
   return res.json();
 }
+
+export async function googleLogin(credential) {
+  const res = await fetch(`${BASE}/google`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ credential }),
+  })
+  return res.json()
+}
