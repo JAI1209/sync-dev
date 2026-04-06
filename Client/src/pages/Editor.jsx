@@ -12,30 +12,30 @@ export default function Editor({ username }) {
   const [joined, setJoined] = useState(false);
   const [language, setLanguage] = useState("javascript");
   const [copied, setCopied] = useState(false);
-  const [showAllParticipants, setShowAllParticipants] = useState(false)
-  const [micEnabled, setMicEnabled] = useState(true)
-  const [cameraEnabled, setCameraEnabled] = useState(false)
-  const [mutedUsers, setMutedUsers] = useState(new Set())
-  const [hoveredUser, setHoveredUser] = useState(null)
+  const [showAllParticipants, setShowAllParticipants] = useState(false);
+  const [micEnabled, setMicEnabled] = useState(true);
+  const [cameraEnabled, setCameraEnabled] = useState(false);
+  const [mutedUsers, setMutedUsers] = useState(new Set());
+  const [hoveredUser, setHoveredUser] = useState(null);
 
-  const pinnedUsers = users.slice(0, 2)
-  const remainingUsers = users.slice(2)
-  const activeSpeakerId = users[0]?.id
+  const visibleUsers = showAllParticipants ? users : users.slice(0, 4);
+  const hiddenCount = users.length - 4;
+  const activeSpeakerId = users[0]?.id;
 
   const toggleMuteUser = (userId) => {
     setMutedUsers((prev) => {
-      const next = new Set(prev)
+      const next = new Set(prev);
       if (next.has(userId)) {
-        next.delete(userId)
+        next.delete(userId);
       } else {
-        next.add(userId)
+        next.add(userId);
       }
-      return next
-    })
-  }
+      return next;
+    });
+  };
 
   useEffect(() => {
-    socketRef.current = io("http://localhost:3000");
+    socketRef.current = io(import.meta.env.VITE_API_URL || "http://localhost:5173");
     socketRef.current.emit("join-room", { roomId, username });
 
     socketRef.current.on("load-code", (existingCode) => {
@@ -55,6 +55,8 @@ export default function Editor({ username }) {
       socketRef.current.disconnect();
     };
   }, [roomId, username]);
+
+  console.log('users:', users, 'joined:', joined);
 
   const handleCodeChange = (value) => {
     setCode(value);
@@ -144,8 +146,8 @@ export default function Editor({ username }) {
             <span className="participants-count">{users.length}</span>
           </div>
 
-          <div className="participants-pinned">
-            {pinnedUsers.map((u) => (
+          <div className="participants-scroll">
+            {visibleUsers.map((u) => (
               <div
                 key={u.id}
                 className={`participant-card ${mutedUsers.has(u.id) ? 'muted' : ''} ${u.id === activeSpeakerId ? 'active-speaker' : ''}`}
@@ -161,7 +163,7 @@ export default function Editor({ username }) {
                     {u.username === username ? 'you' : 'team member'}
                   </p>
                 </div>
-                <span className={`participant-status ${u.username === username ? 'active' : 'active'}`} />
+                <span className="participant-status active" />
 
                 {hoveredUser === u.id && u.username !== username && (
                   <div className="participant-actions">
@@ -178,48 +180,12 @@ export default function Editor({ username }) {
             ))}
           </div>
 
-          <div className="participants-scroll">
-            {remainingUsers.length > 0 && showAllParticipants && (
-              remainingUsers.map((u) => (
-                <div
-                  key={u.id}
-                  className={`participant-card ${mutedUsers.has(u.id) ? 'muted' : ''} ${u.id === activeSpeakerId ? 'active-speaker' : ''}`}
-                  onMouseEnter={() => setHoveredUser(u.id)}
-                  onMouseLeave={() => setHoveredUser(null)}
-                >
-                  <div className={`participant-avatar ${u.username === username ? 'you' : ''}`} title={u.username}>
-                    {u.username[0]?.toUpperCase()}
-                  </div>
-                  <div className="participant-info">
-                    <p className="participant-name">{u.username}</p>
-                    <p className="participant-state">
-                      {u.username === username ? 'you' : 'team member'}
-                    </p>
-                  </div>
-                  <span className={`participant-status ${u.username === username ? 'active' : 'active'}`} />
-
-                  {hoveredUser === u.id && u.username !== username && (
-                    <div className="participant-actions">
-                      <button
-                        className="participant-action mute-btn"
-                        onClick={() => toggleMuteUser(u.id)}
-                        title={mutedUsers.has(u.id) ? 'Unmute' : 'Mute'}
-                      >
-                        {mutedUsers.has(u.id) ? '🔇' : '🔊'}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-
-          {remainingUsers.length > 0 && (
+          {users.length > 4 && (
             <button
               className="participants-toggle"
               onClick={() => setShowAllParticipants((prev) => !prev)}
             >
-              {showAllParticipants ? 'Hide participants' : `Show ${remainingUsers.length} more`}
+              {showAllParticipants ? 'Show less' : `Show ${hiddenCount} more`}
             </button>
           )}
         </aside>
