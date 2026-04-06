@@ -1,3 +1,7 @@
+// screens.jsx — friend's UI components, with Google OAuth properly wired in
+// ONLY LoginForm is modified — everything else is untouched
+
+import { GoogleLogin } from '@react-oauth/google'
 import {
   AlertBox,
   Button,
@@ -66,6 +70,7 @@ function AuthRail({ mode }) {
   )
 }
 
+// ── LoginForm — Google OAuth wired in ────────────────────────────────────────
 function LoginForm({
   authBanner,
   authBusy,
@@ -75,6 +80,8 @@ function LoginForm({
   onNavigate,
   onTogglePassword,
   showPassword,
+  onGoogleSuccess,  // NEW — passed from App.jsx
+  onGoogleError,    // NEW — passed from App.jsx
 }) {
   return (
     <>
@@ -145,9 +152,15 @@ function LoginForm({
 
       <Divider text="OR CONTINUE WITH" />
 
+      {/* Real Google OAuth — replaces the placeholder OAuthButton */}
       <div className="oauth-grid">
-        <OAuthButton provider="google">Google Login</OAuthButton>
-        <OAuthButton provider="github">GitHub Login</OAuthButton>
+        <GoogleLogin
+          onSuccess={onGoogleSuccess}
+          onError={onGoogleError}
+          theme="filled_black"
+          shape="rectangular"
+          width="100%"
+        />
       </div>
     </>
   )
@@ -448,7 +461,7 @@ export function DashboardScreen({
                 </div>
                 <div className="code-line">
                   <span className="line-no">02</span>
-                  <span className="line-code code-line--accent">  roomId: &apos;{joinRoomId}&apos;,</span>
+                  <span className="line-code code-line--accent">  roomId: &apos;{joinRoomId || 'SD-????'}&apos;,</span>
                 </div>
                 <div className="code-line">
                   <span className="line-no">03</span>
@@ -456,7 +469,7 @@ export function DashboardScreen({
                 </div>
                 <div className="code-line">
                   <span className="line-no">04</span>
-                  <span className="line-code">  peers: ['me', 'pair-engineer'],</span>
+                  <span className="line-code">  peers: ['{activeUser}', 'pair-engineer'],</span>
                 </div>
                 <div className="code-line">
                   <span className="line-no">05</span>
@@ -474,7 +487,7 @@ export function DashboardScreen({
 
               <div className="presence-rail">
                 <div className="presence-card">
-                  <span className="presence-card__name">you</span>
+                  <span className="presence-card__name">{activeUser}</span>
                   <span className="presence-card__state">editing session.tsx</span>
                 </div>
                 <div className="presence-card presence-card--accent">
@@ -490,7 +503,7 @@ export function DashboardScreen({
           className="sessions-card"
           eyebrow="// history"
           stamp="{ }"
-          subtitle="UI only"
+          subtitle="Recent rooms"
           title="Recent Sessions"
         >
           <div className="session-list">
