@@ -1,6 +1,4 @@
 export default function Dashboard({ onLogout }) {
-  const username = 'user' // we'll pull this from token later
-
   return (
     <div style={{ padding: '2rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', borderBottom: '1px solid #2a2e3d', paddingBottom: '1rem' }}>

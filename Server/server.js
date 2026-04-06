@@ -10,10 +10,9 @@ app.use(cors({ origin: 'http://localhost:5173' }));
 app.use("/api/auth", authRoutes);
 
 
-const uri = process.env.MONGODB_URI;
-if (!uri) {
-  console.error("MONGODB_URI is missing in .env");
-  process.exit(1);
+const uri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/syncdev';
+if (!process.env.MONGODB_URI) {
+  console.warn('MONGODB_URI is not set. Using local MongoDB fallback.');
 }
 
 let server;
