@@ -117,7 +117,9 @@ export default function App() {
   // clears banner when switching modes
   const handleAuthNavigate = (mode) => {
     setAuthBanner(null)
-    setAuthMode(mode)
+    if (mode === 'login') navigate('/login')
+    else if (mode === 'register') navigate('/register')
+    else setAuthMode(mode)
   }
 
   // ── dashboard handlers ─────────────────────────────────────────────────────
