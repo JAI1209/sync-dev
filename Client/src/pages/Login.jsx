@@ -1,20 +1,32 @@
 import { useState } from 'react'
-import { loginUser } from '../api/auth'
+import { useNavigate } from 'react-router-dom'
+import { loginUser , googleLogin } from '../api/auth'
+import { GoogleLogin } from '@react-oauth/google'
 
-export default function Login({ onLogin, onGoRegister }) {
+
+
+export default function Login({ onLogin }) {
+    const navigate = useNavigate()
     const [username, setUsername] = useState('')
     const [password, setPassword] = useState('')
     const [error, setError] = useState('')
     const [loading, setLoading] = useState(false)
 
+    const handleGoogleSuccess = async (credentialResponse) => {
+        const data = await googleLogin(credentialResponse.credential)
+        if (data.token) {
+            onLogin(data.token)
+        } else {
+            setError('Google login failed')
+        }
+    }
+
     const handleSubmit = async (e) => {
         e.preventDefault()
         setError('')
         setLoading(true)
-
         const data = await loginUser(username, password)
         setLoading(false)
-
         if (data.token) {
             onLogin(data.token)
         } else {
@@ -27,43 +39,30 @@ export default function Login({ onLogin, onGoRegister }) {
             <div className="card">
                 <h2>SyncDev</h2>
                 <p>Sign in to your account</p>
-
                 {error && <p className="error">{error}</p>}
-
                 <form onSubmit={handleSubmit}>
                     <div className="field">
                         <label>Username</label>
-                        <input
-                            type="text"
-                            placeholder="Enter username"
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            required
-                        />
+                        <input type="text" placeholder="Enter username" value={username} onChange={(e) => setUsername(e.target.value)} required />
                     </div>
-
                     <div className="field">
                         <label>Password</label>
-                        <input
-                            type="password"
-                            placeholder="Enter password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            required
-                        />
+                        <input type="password" placeholder="Enter password" value={password} onChange={(e) => setPassword(e.target.value)} required />
                     </div>
-
                     <button type="submit" disabled={loading}>
                         {loading ? 'Signing in...' : 'Sign In'}
                     </button>
                 </form>
-
                 <p style={{ marginTop: '1.25rem', fontSize: '13px', color: '#6b7094' }}>
                     Don't have an account?{' '}
-                    <span className="link" onClick={onGoRegister}>
-                        Register
-                    </span>
+                    <span className="link" onClick={() => navigate('/register')}>Register</span>
                 </p>
+                <div style={{ marginTop: '1rem' }}>
+                    <GoogleLogin
+                        onSuccess={handleGoogleSuccess}
+                        onError={() => setError('Google login failed')}
+                    />
+                </div>
             </div>
         </div>
     )
