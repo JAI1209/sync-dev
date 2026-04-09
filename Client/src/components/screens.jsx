@@ -341,6 +341,7 @@ export function DashboardScreen({
   onJoinRoomIdChange,
   onJoinSession,
   onReconnect,
+  reconnectingId,
   recentSessions,
 }) {
   return (
@@ -509,7 +510,7 @@ export function DashboardScreen({
           <div className="session-list">
             {recentSessions.map((session) => (
               <SessionCard
-                busy={dashboardBusy === session.id}
+                busy={reconnectingId === session.id}
                 key={session.id}
                 onReconnect={onReconnect}
                 session={session}

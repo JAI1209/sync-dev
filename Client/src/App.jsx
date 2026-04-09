@@ -6,11 +6,28 @@ import Editor from './pages/Editor'
 import logoSrc from './assets/SD.png'
 import { loginUser, googleLogin, registerUser } from './api/auth'
 
-// ─── mock recent sessions (replace with real API call later) ───────────────
-const MOCK_SESSIONS = [
-  { id: 'SD-4821', status: 'live', participants: 3, created: '2 hrs ago' },
-  { id: 'SD-2049', status: 'closed', participants: 1, created: 'Yesterday' },
-]
+// ─── helpers ────────────────────────────────────────────────────────────────
+const SESSIONS_KEY = 'syncdev_recent_sessions'
+
+function loadSessions() {
+  try { return JSON.parse(localStorage.getItem(SESSIONS_KEY)) || [] }
+  catch { return [] }
+}
+
+function saveSessions(sessions) {
+  localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions))
+}
+
+function addSession(sessions, id) {
+  const now = new Date()
+  const label = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const newSession = { id, status: 'live', participants: 1, created: `Today ${label}` }
+  // deduplicate — if same room rejoined, bump it to top
+  const filtered = sessions.filter(s => s.id !== id)
+  const updated = [newSession, ...filtered].slice(0, 10) // keep last 10
+  saveSessions(updated)
+  return updated
+}
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('token'))
@@ -30,6 +47,7 @@ export default function App() {
   const [joinRoomId, setJoinRoomId] = useState('')
   const [dashboardBusy, setDashboardBusy] = useState(null)
   const [dashboardBanner, setDashboardBanner] = useState(null)
+  const [recentSessions, setRecentSessions] = useState(loadSessions)
 
   // ── helpers ────────────────────────────────────────────────────────────────
   const getUsername = () => {
@@ -128,8 +146,9 @@ export default function App() {
     const id = Math.random().toString(36).substring(2, 8).toUpperCase()
     setTimeout(() => {
       setDashboardBusy(null)
+      setRecentSessions(prev => addSession(prev, id))
       navigate(`/editor/${id}`)
-    }, 600) // brief delay so spinner shows — replace with real API call if needed
+    }, 600)
   }
 
   const handleJoinSession = (e) => {
@@ -138,15 +157,23 @@ export default function App() {
       setDashboardBanner({ tone: 'danger', title: 'No room ID', detail: 'Enter a room code to connect' })
       return
     }
+    const id = joinRoomId.trim()
     setDashboardBusy('join')
     setTimeout(() => {
       setDashboardBusy(null)
-      navigate(`/editor/${joinRoomId.trim()}`)
+      setRecentSessions(prev => addSession(prev, id))
+      navigate(`/editor/${id}`)
     }, 500)
   }
 
+  const [reconnectingId, setReconnectingId] = useState(null)
+
   const handleReconnect = (session) => {
-    navigate(`/editor/${session.id}`)
+    setReconnectingId(session.id)
+    setTimeout(() => {
+      setReconnectingId(null)
+      navigate(`/editor/${session.id}`)
+    }, 500)
   }
 
   // ── shared auth screen props ───────────────────────────────────────────────
@@ -233,7 +260,8 @@ export default function App() {
                   onJoinRoomIdChange={setJoinRoomId}
                   onJoinSession={handleJoinSession}
                   onReconnect={handleReconnect}
-                  recentSessions={MOCK_SESSIONS}
+                  reconnectingId={reconnectingId}
+                  recentSessions={recentSessions}
                 />
               </>
             ) : <Navigate to="/login" />

@@ -1460,3 +1460,161 @@ button {
     justify-content: center;
   }
 }
+
+
+.media-error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+  background: rgba(239, 68, 68, 0.15);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  font-size: 13px;
+  font-weight: 500;
+  z-index: 50;
+}
+.media-error-close {
+  background: none;
+  border: none;
+  color: #fca5a5;
+  cursor: pointer;
+  font-size: 15px;
+  padding: 0 4px;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.media-error-close:hover { opacity: 1; }
+
+/* ─── Floating video grid ─────────────────────────────────────────────────── */
+.video-grid {
+  position: fixed;
+  bottom: 70px;      /* sit just above the toolbar */
+  right: 16px;
+  z-index: 100;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 520px;
+  background: rgba(10, 10, 14, 0.85);
+  border: 1px solid var(--border, #2a2a35);
+  border-radius: 10px;
+  padding: 10px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+.video-grid-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--muted, #888);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.video-grid-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ─── Individual video tile ───────────────────────────────────────────────── */
+.video-tile {
+  position: relative;
+  width: 160px;
+  height: 120px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #111117;
+  border: 1px solid var(--border, #2a2a35);
+  flex-shrink: 0;
+}
+
+.video-tile--self {
+  border-color: var(--accent, #22c55e);
+}
+
+.video-el {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transform: scaleX(-1); /* mirror self-preview */
+}
+
+/* Don't mirror remote video */
+.video-tile:not(.video-tile--self) .video-el {
+  transform: none;
+}
+
+.video-label {
+  position: absolute;
+  bottom: 4px;
+  left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 2px 6px;
+  border-radius: 4px;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.video-mic-indicator {
+  position: absolute;
+  top: 5px;
+  left: 6px;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+
+.video-mute-btn {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  border: none;
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #fff;
+  transition: background 0.15s;
+}
+.video-mute-btn:hover { background: rgba(0, 0, 0, 0.8); }
+
+/* Placeholder when peer has audio-only */
+.video-avatar-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #1e1e2e 0%, #2a2a3e 100%);
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--accent, #22c55e);
+  letter-spacing: 0.05em;
+}
+
+/* ─── Toolbar button state updates ───────────────────────────────────────── */
+.toolbar-button.active {
+  background: rgba(34, 197, 94, 0.18);
+  border-color: var(--accent, #22c55e);
+  color: var(--accent, #22c55e);
+}
+.toolbar-button.inactive {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
