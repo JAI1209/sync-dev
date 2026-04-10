@@ -361,7 +361,7 @@ Real Time Communication
 
 ## System Architecture & DevOps
 
-**Priya Prajapati**
+**Prahlad Jha**
 System Architect
 CI/CD Pipeline Engineering
 
