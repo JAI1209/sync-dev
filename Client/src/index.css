@@ -1257,7 +1257,22 @@ button {
   color: var(--text);
   border-bottom: 2px solid var(--primary);
 }
-.tab__dot { font-size: 10px; flex-shrink: 0; }
+.tab__file-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 16px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
 .tab__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tab__close {
   background: none;
@@ -1350,6 +1365,32 @@ button {
 }
 .ft-icon { font-size: 11px; flex-shrink: 0; }
 .ft-icon--folder { color: #e8c07d; width: 14px; text-align: center; }
+.ft-icon--file-badge {
+  position: relative;
+  width: 28px;
+  min-width: 28px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ft-icon__diamond {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+.ft-icon__ext {
+  position: relative;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  color: var(--text);
+  text-transform: uppercase;
+}
 .ft-label {
   flex: 1;
   overflow: hidden;

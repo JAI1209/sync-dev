@@ -10,6 +10,11 @@ function extColor(name) {
   return EXT_COLORS[ext] || "#8b949e";
 }
 
+function extLabel(name) {
+  const ext = (name || "").split(".").pop().toLowerCase();
+  return (ext || "txt").replace(/[^a-z0-9]/gi, "").slice(0, 3).toUpperCase() || "TXT";
+}
+
 export default function TabBar({ files, openTabs, activeFileId, onActivate, onClose }) {
   if (!openTabs.length) return null;
 
@@ -20,6 +25,8 @@ export default function TabBar({ files, openTabs, activeFileId, onActivate, onCl
         const name   = file?.name || id;
         const active = id === activeFileId;
         const color  = extColor(name);
+        const label  = extLabel(name);
+        const badgeBackground = `${color}22`;
 
         return (
           <div
@@ -28,7 +35,9 @@ export default function TabBar({ files, openTabs, activeFileId, onActivate, onCl
             onClick={() => onActivate(id)}
             title={name}
           >
-            <span className="tab__dot" style={{ color }}>◆</span>
+            <span className="tab__file-badge" style={{ borderColor: color, color, backgroundColor: badgeBackground }}>
+              {label}
+            </span>
             <span className="tab__name">{name}</span>
             <button
               className="tab__close"

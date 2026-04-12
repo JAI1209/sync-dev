@@ -6,6 +6,7 @@ function IconFolder({ open }) {
 }
 function IconFile({ name }) {
   const ext = (name || "").split(".").pop().toLowerCase();
+  const label = (ext || "txt").replace(/[^a-z0-9]/gi, "").slice(0, 3).toUpperCase() || "TXT";
   const colors = {
     js:"#f7df1e", jsx:"#61dafb", ts:"#3178c6", tsx:"#61dafb",
     py:"#3572a5", java:"#b07219", cpp:"#f34b7d", c:"#555555",
@@ -15,8 +16,9 @@ function IconFile({ name }) {
   };
   const color = colors[ext] || "#8b949e";
   return (
-    <span className="ft-icon ft-icon--file" style={{ color }}>
-      ◆
+    <span className="ft-icon ft-icon--file-badge" style={{ color }}>
+      <span className="ft-icon__diamond" style={{ borderColor: color, backgroundColor: `${color}33` }} />
+      <span className="ft-icon__ext">{label}</span>
     </span>
   );
 }
@@ -269,3 +271,4 @@ export default function FileTree({
     </div>
   );
 }
+
