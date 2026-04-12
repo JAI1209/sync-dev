@@ -106,7 +106,7 @@ export default function App() {
       return
     }
     setAuthBusy('register')
-    const data = await registerUser(registerForm.username, registerForm.password)
+    const data = await registerUser(registerForm.username, registerForm.password, registerForm.email)
     setAuthBusy(null)
     if (data.token) {
       setAuthBanner({ tone: 'success', title: 'Account created', detail: 'You can now sign in' })
@@ -122,14 +122,19 @@ export default function App() {
   const handleForgotSubmit = async (e) => {
     e.preventDefault()
     setAuthBusy('forgot')
-    // calls POST /api/auth/forgot
-    await fetch('/api/auth/forgot', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: forgotForm.email }),
-    })
-    setAuthBusy(null)
-    setAuthBanner({ tone: 'success', title: 'Reset link queued', detail: 'Check your inbox' })
+    try {
+      const res = await fetch('/api/auth/forgot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotForm.email }),
+      })
+      const data = await res.json()
+      setAuthBanner({ tone: res.ok ? 'success' : 'danger', title: res.ok ? 'Reset link queued' : 'Error', detail: data.msg || (res.ok ? 'Check your inbox' : 'Please try again') })
+    } catch {
+      setAuthBanner({ tone: 'danger', title: 'Network error', detail: 'Could not reach server' })
+    } finally {
+      setAuthBusy(null)
+    }
   }
 
   // clears banner when switching modes
