@@ -15,7 +15,16 @@ const UserSchema = new mongoose.Schema({
     password: {
         type: String,
         required: true,
-    }
+    },
+    githubId: {
+        type: String,
+        sparse: true,
+        unique: true,
+    },
+    githubUsername: { type: String },
+    githubAccessToken: { type: String, select: false },
+    githubRefreshToken: { type: String, select: false },
+    githubTokenExpiry: { type: Date },
 });
 
 module.exports = mongoose.model('User', UserSchema);

@@ -105,7 +105,9 @@ export function useFileSystem() {
   const renameFile = useCallback((fileId, name) => {
     setFiles((prev) => {
       if (!prev[fileId]) return prev;
-      return { ...prev, [fileId]: { ...prev[fileId], name, language: extToLanguage(name) } };
+      const cur = prev[fileId];
+      const { repoPath: _rp, ...rest } = cur;
+      return { ...prev, [fileId]: { ...rest, name, language: extToLanguage(name) } };
     });
   }, []);
 
@@ -146,11 +148,14 @@ export function useFileSystem() {
 
   // ── BUG FIX: Bulk load files (upload) — MERGE into existing state instead
   //    of replacing it. Replacing caused the tree to lose all prior files.  ──
-  const loadFiles = useCallback((newFiles, newFolders = {}) => {
+  const loadFiles = useCallback((newFiles, newFolders = {}, preferredActiveFileId = null) => {
     setFiles((prev) => ({ ...prev, ...newFiles }));
     setFolders((prev) => ({ ...prev, ...newFolders }));
-    // Open only the first newly-uploaded file
-    const firstNew = Object.keys(newFiles)[0] || null;
+    // Prefer stable upload order (picker order); else any new key.
+    const firstNew =
+      (preferredActiveFileId && newFiles[preferredActiveFileId] ? preferredActiveFileId : null) ||
+      Object.keys(newFiles)[0] ||
+      null;
     if (firstNew) {
       setActiveFileId(firstNew);
       setOpenTabs((prev) => (prev.includes(firstNew) ? prev : [...prev, firstNew]));
@@ -174,8 +179,14 @@ export function useFileSystem() {
     closeTab(fileId);
   }, [closeTab]);
 
-  const applyFolderDeleted = useCallback(({ folderId, deletedFiles = [] }) => {
-    setFolders((p) => { const n = { ...p }; delete n[folderId]; return n; });
+  const applyFolderDeleted = useCallback(({ folderId, deletedFiles = [], deletedFolders }) => {
+    const folderIds =
+      deletedFolders && deletedFolders.length ? deletedFolders : [folderId];
+    setFolders((p) => {
+      const n = { ...p };
+      folderIds.forEach((id) => { delete n[id]; });
+      return n;
+    });
     setFiles((p) => {
       const n = { ...p };
       deletedFiles.forEach((fid) => delete n[fid]);

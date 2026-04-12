@@ -1,7 +1,7 @@
-const BASE = "/api/auth";
+import { apiUrl } from "./client";
 
 export async function loginUser(username, password) {
-  const res = await fetch(`${BASE}/login`, {
+  const res = await fetch(apiUrl("/api/auth/login"), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
@@ -10,7 +10,7 @@ export async function loginUser(username, password) {
 }
 
 export async function registerUser(username, password, email) {
-  const res = await fetch(`${BASE}/register`, {
+  const res = await fetch(apiUrl("/api/auth/register"), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password, email }),
@@ -19,7 +19,7 @@ export async function registerUser(username, password, email) {
 }
 
 export async function googleLogin(credential) {
-  const res = await fetch(`${BASE}/google`, {
+  const res = await fetch(apiUrl("/api/auth/google"), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ credential }),

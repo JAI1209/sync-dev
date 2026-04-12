@@ -2,6 +2,7 @@
 // ONLY LoginForm is modified — everything else is untouched
 
 import { GoogleLogin } from '@react-oauth/google'
+import { apiUrl } from '../api/client'
 import {
   AlertBox,
   Button,
@@ -153,7 +154,7 @@ function LoginForm({
       <Divider text="OR CONTINUE WITH" />
 
       {/* Real Google OAuth — replaces the placeholder OAuthButton */}
-      <div className="oauth-grid">
+      <div className="oauth-grid oauth-grid--stack">
         <GoogleLogin
           onSuccess={onGoogleSuccess}
           onError={onGoogleError}
@@ -161,6 +162,15 @@ function LoginForm({
           shape="rectangular"
           width="100%"
         />
+        <OAuthButton
+          provider="github"
+          type="button"
+          onClick={() => {
+            window.location.assign(apiUrl("/api/auth/github/start"));
+          }}
+        >
+          Continue with GitHub
+        </OAuthButton>
       </div>
     </>
   )
@@ -343,6 +353,15 @@ export function DashboardScreen({
   onReconnect,
   reconnectingId,
   recentSessions,
+  githubConnected,
+  githubImportBusy,
+  ghOwner,
+  ghRepo,
+  ghRef,
+  onGhOwnerChange,
+  onGhRepoChange,
+  onGhRefChange,
+  onGitHubImportSubmit,
 }) {
   return (
     <main className="page page--dashboard">
@@ -386,6 +405,60 @@ export function DashboardScreen({
                   </>
                 ) : (
                   'Connect to Session'
+                )}
+              </Button>
+            </form>
+          </div>
+
+          <div className="dashboard-github-panel">
+            <p className="dashboard-github-panel__eyebrow">// import from github</p>
+            {!githubConnected ? (
+              <p className="dashboard-github-panel__hint">
+                Sign in with <strong>GitHub</strong> from the login page. Use the repo name only or a full <code style={{ opacity: 0.85 }}>github.com/owner/repo</code> URL — not a profile link.
+              </p>
+            ) : null}
+            <form className="github-import-form" onSubmit={onGitHubImportSubmit}>
+              <div className="github-import-form__row">
+                <Field
+                  hint="// username or org"
+                  label="OWNER"
+                  onChange={(event) => onGhOwnerChange(event.target.value)}
+                  placeholder="octocat"
+                  required={githubConnected}
+                  type="text"
+                  value={ghOwner}
+                />
+                <Field
+                  hint="// repo name or full github.com/owner/repo URL"
+                  label="REPO"
+                  onChange={(event) => onGhRepoChange(event.target.value)}
+                  placeholder="Hello-World"
+                  required={githubConnected}
+                  type="text"
+                  value={ghRepo}
+                />
+                <Field
+                  hint="// optional"
+                  label="BRANCH"
+                  onChange={(event) => onGhRefChange(event.target.value)}
+                  placeholder="main"
+                  type="text"
+                  value={ghRef}
+                />
+              </div>
+              <Button
+                className="github-import-form__submit"
+                disabled={!githubConnected || githubImportBusy}
+                type="submit"
+                variant="secondary"
+              >
+                {githubImportBusy ? (
+                  <>
+                    <TerminalSpinner />
+                    Fetching repository
+                  </>
+                ) : (
+                  "Open in new session"
                 )}
               </Button>
             </form>

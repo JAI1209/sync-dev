@@ -1,10 +1,14 @@
-require("dotenv").config();
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const authRoutes = require("./routes/Auth");
+const githubOAuthRoutes = require("./routes/githubOAuth");
+const githubImportRoutes = require("./routes/githubImport");
+const executeRoutes = require("./routes/execute");
 
 const app = express();
 const server = http.createServer(app);
@@ -20,8 +24,11 @@ app.use(cors({
   origin: function(origin, callback) { callback(null, true); },
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: "32mb" }));
 app.use("/api/auth", authRoutes);
+app.use("/api/auth/github", githubOAuthRoutes);
+app.use("/api/github", githubImportRoutes);
+app.use("/api/execute", executeRoutes);
 
 // ── Room state ─────────────────────────────────────────────────────────────────
 // rooms[roomId] = {
@@ -31,6 +38,30 @@ app.use("/api/auth", authRoutes);
 //   users: [{ id, socketId, username }]
 // }
 const rooms = {};
+// When the last socket leaves, wait before dropping room state so a browser
+// reload (disconnect → reconnect) does not wipe files and folders.
+const emptyRoomTimers = new Map();
+const EMPTY_ROOM_GRACE_MS = Number(process.env.EMPTY_ROOM_GRACE_MS) || 120_000;
+
+function clearEmptyRoomTimer(roomId) {
+  const t = emptyRoomTimers.get(roomId);
+  if (t) {
+    clearTimeout(t);
+    emptyRoomTimers.delete(roomId);
+  }
+}
+
+function scheduleEmptyRoomDeletion(roomId) {
+  clearEmptyRoomTimer(roomId);
+  emptyRoomTimers.set(
+    roomId,
+    setTimeout(() => {
+      emptyRoomTimers.delete(roomId);
+      if (!rooms[roomId]) return;
+      if (rooms[roomId].users.length === 0) delete rooms[roomId];
+    }, EMPTY_ROOM_GRACE_MS)
+  );
+}
 
 function makeDefaultRoom() {
   const fileId = "file_main";
@@ -54,6 +85,7 @@ io.on("connection", (socket) => {
     socket.username = username;
 
     if (!rooms[roomId]) rooms[roomId] = makeDefaultRoom();
+    clearEmptyRoomTimer(roomId);
 
     rooms[roomId].users = rooms[roomId].users.filter((u) => u.id !== socket.id);
     rooms[roomId].users.push({ id: socket.id, username });
@@ -123,12 +155,17 @@ io.on("connection", (socket) => {
   // ── Delete folder (and all children) ────────────────────────────────────────
   socket.on("delete-folder", ({ roomId, folderId }) => {
     if (!rooms[roomId]) return;
-    const deletedFiles = deleteFolder(rooms[roomId], folderId);
+    const { deletedFiles, deletedFolders } = deleteFolder(rooms[roomId], folderId);
     if (deletedFiles.includes(rooms[roomId].activeFile)) {
       const remaining = Object.keys(rooms[roomId].files);
       rooms[roomId].activeFile = remaining[0] || null;
     }
-    socket.to(roomId).emit("folder-deleted", { folderId, deletedFiles, newActiveFile: rooms[roomId].activeFile });
+    socket.to(roomId).emit("folder-deleted", {
+      folderId,
+      deletedFiles,
+      deletedFolders,
+      newActiveFile: rooms[roomId].activeFile,
+    });
   });
 
   // ── Switch active file ───────────────────────────────────────────────────────
@@ -150,10 +187,8 @@ io.on("connection", (socket) => {
       rooms[roomId].users = rooms[roomId].users.filter((u) => u.id !== socket.id);
       io.to(roomId).emit("users-update", rooms[roomId].users);
       socket.to(roomId).emit("peer-left", { socketId: socket.id });
-      // BUG FIX: clean up empty rooms to prevent memory leak on long-running servers
-      if (rooms[roomId].users.length === 0) {
-        delete rooms[roomId];
-      }
+      // Defer deletion so a solo tab reload can rejoin before state is dropped.
+      if (rooms[roomId].users.length === 0) scheduleEmptyRoomDeletion(roomId);
     }
     console.log("user disconnected:", socket.id);
   });
@@ -162,18 +197,20 @@ io.on("connection", (socket) => {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function deleteFolder(room, folderId) {
   const deletedFiles = [];
-  // Delete all child files
+  const deletedFolders = [];
   for (const [id, file] of Object.entries(room.files)) {
     if (file.parentId === folderId) { delete room.files[id]; deletedFiles.push(id); }
   }
-  // Recurse into child folders
   for (const [id, folder] of Object.entries(room.folders)) {
     if (folder.parentId === folderId) {
-      deletedFiles.push(...deleteFolder(room, id));
+      const nested = deleteFolder(room, id);
+      deletedFiles.push(...nested.deletedFiles);
+      deletedFolders.push(...nested.deletedFolders);
     }
   }
   delete room.folders[folderId];
-  return deletedFiles;
+  deletedFolders.push(folderId);
+  return { deletedFiles, deletedFolders };
 }
 
 function extToLanguage(ext) {

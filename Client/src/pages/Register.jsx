@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { registerUser } from '../api/auth'
 
-export default function Register({ onGoLogin }) {
+export default function Register() {
   const navigate = useNavigate()
   const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -13,7 +14,7 @@ export default function Register({ onGoLogin }) {
     e.preventDefault()
     setError('')
     setLoading(true)
-    const data = await registerUser(username, password)
+    const data = await registerUser(username, password, email)
     setLoading(false)
     if (data.token) {
       navigate('/login')
@@ -32,6 +33,10 @@ export default function Register({ onGoLogin }) {
           <div className="field">
             <label>Username</label>
             <input type="text" placeholder="Enter username" value={username} onChange={(e) => setUsername(e.target.value)} required />
+          </div>
+          <div className="field">
+            <label>Email</label>
+            <input type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </div>
           <div className="field">
             <label>Password</label>

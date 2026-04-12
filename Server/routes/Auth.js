@@ -10,34 +10,41 @@ const client = new OAuth2Client(config.googleClientId);
 
 
 router.post('/google', async (req, res) => {
-  const { credential } = req.body
+  const { credential } = req.body;
+
+  if (!config.googleClientId) {
+    return res.status(503).json({ msg: "Google sign-in is not configured." });
+  }
 
   try {
     const ticket = await client.verifyIdToken({
       idToken: credential,
-      audience: process.env.GOOGLE_CLIENT_ID,
-    })
+      audience: config.googleClientId,
+    });
 
-    const { email, name } = ticket.getPayload()
+    const { email } = ticket.getPayload();
 
-    let user = await User.findOne({ username: email })
+    let user = await User.findOne({ username: email });
     if (!user) {
-      const salt = await bcrypt.genSalt(10)
-      const hashedPassword = await bcrypt.hash(email + process.env.JWT_SECRET, salt)
-      user = new User({ username: email, email, password: hashedPassword })
-      await user.save()
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(`${email}:${config.jwtSecret}`, salt);
+      user = new User({ username: email, email, password: hashedPassword });
+      await user.save();
     }
 
-    const payload = { user: { id: user.id, username: name } }
+    const payload = { user: { id: user.id, username: user.username } };
     jwt.sign(payload, config.jwtSecret, { expiresIn: 3600 }, (err, token) => {
-      if (err) throw err
-      res.json({ token })
-    })
+      if (err) {
+        console.error(err);
+        return res.status(500).json({ msg: "Could not create session." });
+      }
+      return res.json({ token });
+    });
   } catch (err) {
-    console.error(err.message)
-    res.status(500).send('Server Error')
+    console.error(err.message);
+    res.status(500).send("Server Error");
   }
-})
+});
 
 
 
@@ -61,7 +68,7 @@ router.post("/register", async (req, res) => {
     await user.save();
 
     const payload = {
-      user: { id: user.id },
+      user: { id: user.id, username: user.username },
     };
 
     const token = jwt.sign(payload, config.jwtSecret, { expiresIn: 3600 });
@@ -125,13 +132,17 @@ router.get("/me", async (req, res) => {
 
   try {
     const decoded = jwt.verify(token, config.jwtSecret);
-    const user = await User.findById(decoded.user.id).select("username email");
+    const user = await User.findById(decoded.user.id).select("username email githubId");
 
     if (!user) {
       return res.status(401).json({ msg: "Invalid token" });
     }
 
-    res.json({ username: user.username, email: user.email });
+    res.json({
+      username: user.username,
+      email: user.email,
+      githubConnected: Boolean(user.githubId),
+    });
   } catch (err) {
     console.error(err.message);
     res.status(401).json({ msg: "Invalid token" });

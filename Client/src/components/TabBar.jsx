@@ -1,5 +1,3 @@
-import { fileIcon } from "../hooks/useFileSystem";
-
 const EXT_COLORS = {
   js:"#f7df1e", jsx:"#61dafb", ts:"#3178c6", tsx:"#61dafb",
   py:"#3572a5", java:"#b07219", cpp:"#f34b7d", c:"#555555",

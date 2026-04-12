@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo, lazy, Suspense } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import MonacoEditor, { useMonaco } from "@monaco-editor/react";
 import { io } from "socket.io-client";
 import { useFileSystem, extToLanguage } from "../hooks/useFileSystem";
 import FileTree from "../components/FileTree";
 import TabBar from "../components/TabBar";
-import { readUploadedFiles } from "../utils/readFiles";
+import { readUploadedFiles, sortFoldersParentFirst } from "../utils/readFiles";
+import { collectRepoFiles, buildRepoPath } from "../utils/repoPaths";
+import { commitGitHubRepo } from "../api/github";
+import JSZip from "jszip";
+const RunTerminal = lazy(() => import("../components/RunTerminal.jsx"));
 
 const RTC_CONFIG = {
   iceServers: [
@@ -25,7 +29,7 @@ export default function Editor({ username }) {
   const fs = useFileSystem();
   const {
     files, folders, activeFileId, openTabs,
-    loadRoomState, openFile, closeTab,
+    loadRoomState, loadFiles, openFile, closeTab,
     updateFileContent,
     createFile, createFolder,
     renameFile, renameFolder,
@@ -57,6 +61,14 @@ export default function Editor({ username }) {
   const [uploadStatus, setUploadStatus] = useState(null);
   const uploadInputRef = useRef(null);
 
+  const [githubMeta, setGithubMeta] = useState(null);
+  const [commitBranch, setCommitBranch] = useState("");
+  const [commitMessage, setCommitMessage] = useState("Update from SyncDev");
+  const [githubBusy, setGithubBusy] = useState(null);
+  const [githubHint, setGithubHint] = useState(null);
+  const [exportHint, setExportHint] = useState(null);
+  const [terminalOpen, setTerminalOpen] = useState(true);
+
   // ── WebRTC state ───────────────────────────────────────────────────────────
   const [micOn,         setMicOn]         = useState(false);
   const [camOn,         setCamOn]         = useState(false);
@@ -76,6 +88,22 @@ export default function Editor({ username }) {
 
   useEffect(() => { usersRef.current = users; }, [users]);
 
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(`syncdev_github_${roomId}`);
+      if (raw) {
+        const m = JSON.parse(raw);
+        setGithubMeta(m);
+        setCommitBranch(m.commitBranch || m.defaultBranch || "");
+      } else {
+        setGithubMeta(null);
+        setCommitBranch("");
+      }
+    } catch {
+      setGithubMeta(null);
+    }
+  }, [roomId]);
+
   // ── Model helpers ──────────────────────────────────────────────────────────
   const getOrCreateModel = useCallback((fileId) => {
     if (!monaco) return null;
@@ -89,7 +117,15 @@ export default function Editor({ username }) {
     const uri = monaco.Uri.parse(`syncdev://files/${fileId}`);
     const byUri = monaco.editor.getModel(uri);
     if (byUri && !byUri.isDisposed()) {
+      const wasTracked = modelsRef.current[fileId] === byUri;
       modelsRef.current[fileId] = byUri;
+      const file = filesRef.current[fileId];
+      const next = file?.content ?? "";
+      // @monaco-editor/react may create an empty model at this URI when the editor becomes ready;
+      // adopt it and hydrate from workspace so the pane does not stay blank.
+      if (!wasTracked && byUri.getValue() !== next) {
+        byUri.setValue(next);
+      }
       return byUri;
     }
 
@@ -102,7 +138,7 @@ export default function Editor({ username }) {
     return model;
   }, [monaco]);
 
-  // ── Switch active model in editor ─────────────────────────────────────────
+  // ── Switch active model (runs after child Monaco effects so we win over its path sync) ───────
   useEffect(() => {
     if (!editorRef.current || !monaco || !activeFileId || !mountedRef.current) return;
     const model = getOrCreateModel(activeFileId);
@@ -248,7 +284,10 @@ export default function Editor({ username }) {
       applyFileDeleted({ fileId });
       if (newActiveFile) openFile(newActiveFile);
     });
-    socket.on("folder-deleted", applyFolderDeleted);
+    socket.on("folder-deleted", (payload) => {
+      applyFolderDeleted(payload);
+      if (payload.newActiveFile) openFile(payload.newActiveFile);
+    });
 
     // BUG FIX: file-switched was emitted by server but never handled on client
     socket.on("file-switched", ({ fileId }) => {
@@ -314,6 +353,44 @@ export default function Editor({ username }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId, username]);
 
+  // ── Apply GitHub import queued from dashboard (sessionStorage) ────────────
+  useEffect(() => {
+    if (!joined) return;
+    try {
+      const raw = sessionStorage.getItem("syncdev_pending_import");
+      if (!raw) return;
+      const pending = JSON.parse(raw);
+      if (pending.roomId !== roomId) return;
+      sessionStorage.removeItem("syncdev_pending_import");
+      const { files: newFiles, folders: newFolders, orderedFileIds, github: gh } = pending;
+      if (!newFiles || typeof newFiles !== "object" || !Object.keys(newFiles).length) return;
+      if (gh) {
+        sessionStorage.setItem(`syncdev_github_${roomId}`, JSON.stringify(gh));
+        setGithubMeta(gh);
+        setCommitBranch(gh.commitBranch || gh.defaultBranch || "");
+      }
+      const preferredOpen = (orderedFileIds && orderedFileIds[0]) || null;
+      loadFiles(newFiles, newFolders || {}, preferredOpen);
+      const sock = socketRef.current;
+      if (!sock) return;
+      sortFoldersParentFirst(newFolders || {}).forEach((folder) => {
+        sock.emit("create-folder", { roomId, folder });
+      });
+      const order = orderedFileIds?.length ? orderedFileIds : Object.keys(newFiles);
+      order.forEach((id) => {
+        const file = newFiles[id];
+        if (file) sock.emit("create-file", { roomId, file });
+      });
+    } catch (err) {
+      console.error("GitHub pending import", err);
+      try {
+        sessionStorage.removeItem("syncdev_pending_import");
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [joined, roomId, loadFiles]);
+
   // ── Cleanup all models on unmount ─────────────────────────────────────────
   useEffect(() => {
     return () => {
@@ -359,6 +436,20 @@ export default function Editor({ username }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const monacoOptions = useMemo(
+    () => ({
+      fontSize: 14,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      wordWrap: "on",
+      fontFamily: "JetBrains Mono, monospace",
+      renderLineHighlight: "all",
+      cursorBlinking: "smooth",
+      automaticLayout: true,
+    }),
+    [],
+  );
+
   // ── File tree actions (local + emit) ──────────────────────────────────────
   const handleCreateFile = useCallback((name, parentId) => {
     const file = createFile(name, parentId);
@@ -395,28 +486,131 @@ export default function Editor({ username }) {
     socketRef.current?.emit("delete-folder", { roomId, folderId });
   }, [deleteFolder, folders, roomId]);
 
-  // ── Upload folder / files ──────────────────────────────────────────────────
+  // ── Upload folder (directory picker) ────────────────────────────────────────
   const handleUpload = useCallback(async (e) => {
-    const fileList = e.target.files;
+    const input = e.target;
+    const fileList = input.files;
     if (!fileList || fileList.length === 0) return;
     setUploadStatus("loading");
     try {
-      const { files: newFiles, folders: newFolders, skipped } = await readUploadedFiles(fileList);
-      fs.loadFiles(newFiles, newFolders);
-      Object.values(newFolders).forEach((folder) => {
+      const { files: newFiles, folders: newFolders, skipped, orderedFileIds } =
+        await readUploadedFiles(fileList);
+      const preferredOpen = orderedFileIds[0] ?? null;
+      fs.loadFiles(newFiles, newFolders, preferredOpen);
+      sortFoldersParentFirst(newFolders).forEach((folder) => {
         socketRef.current?.emit("create-folder", { roomId, folder });
       });
-      Object.values(newFiles).forEach((file) => {
-        socketRef.current?.emit("create-file", { roomId, file });
+      const fileEmitOrder = orderedFileIds.length ? orderedFileIds : Object.keys(newFiles);
+      fileEmitOrder.forEach((id) => {
+        const file = newFiles[id];
+        if (file) socketRef.current?.emit("create-file", { roomId, file });
       });
       setUploadStatus(skipped.length > 0 ? { skipped } : null);
       if (skipped.length > 0) setTimeout(() => setUploadStatus(null), 5000);
     } catch (err) {
       console.error("Upload error", err);
-      setUploadStatus(null);
+      const msg = err?.message ? String(err.message) : "Upload failed";
+      setUploadStatus({ error: msg.length > 120 ? `${msg.slice(0, 117)}…` : msg });
+      setTimeout(() => {
+        setUploadStatus((s) =>
+          typeof s === "object" && s !== null && "error" in s ? null : s);
+      }, 8000);
     }
-    e.target.value = "";
+    input.value = "";
   }, [roomId, fs]);
+
+  const triggerDownload = (blob, filename) => {
+    const a = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadCurrentFile = useCallback(() => {
+    const file = files[activeFileId];
+    if (!file) return;
+    const path = buildRepoPath(file, files, folders) || file.name;
+    const baseName = path.includes("/") ? path.split("/").pop() : path;
+    const blob = new Blob([file.content ?? ""], { type: "text/plain;charset=utf-8" });
+    triggerDownload(blob, baseName || "file.txt");
+  }, [activeFileId, files, folders]);
+
+  const handleDownloadZip = useCallback(async () => {
+    setGithubBusy("zip");
+    setExportHint(null);
+    try {
+      const list = collectRepoFiles(files, folders);
+      if (!list.length) {
+        setExportHint("No files to zip.");
+        return;
+      }
+      const zip = new JSZip();
+      for (const { path, content } of list) {
+        zip.file(path, content ?? "");
+      }
+      const blob = await zip.generateAsync({ type: "blob" });
+      const name = `${githubMeta?.repo || "project"}-${roomId}.zip`;
+      triggerDownload(blob, name);
+    } catch (e) {
+      console.error(e);
+      setExportHint(e?.message ? String(e.message) : "Could not build zip.");
+    } finally {
+      setGithubBusy(null);
+    }
+  }, [files, folders, githubMeta?.repo, roomId]);
+
+  const getRunCode = useCallback(() => {
+    const id = activeFileId;
+    if (!id) return "";
+    const ed = editorRef.current;
+    const m = ed?.getModel?.();
+    if (m && modelsRef.current[id] === m) return m.getValue();
+    return filesRef.current[id]?.content ?? "";
+  }, [activeFileId]);
+
+  const handleCommitPush = useCallback(async () => {
+    if (!githubMeta) return;
+    const b = commitBranch.trim();
+    const msg = commitMessage.trim();
+    if (!b || !msg) {
+      setGithubHint("Branch and commit message are required.");
+      return;
+    }
+    setGithubBusy("commit");
+    setGithubHint(null);
+    try {
+      const list = collectRepoFiles(files, folders);
+      if (!list.length) {
+        setGithubHint("No files to commit.");
+        return;
+      }
+      const data = await commitGitHubRepo(
+        githubMeta.owner,
+        githubMeta.repo,
+        b,
+        msg,
+        list
+      );
+      const sha = data.commitSha || "";
+      setGithubHint(sha ? `Pushed commit ${sha.slice(0, 7)}` : "Pushed to GitHub.");
+      setGithubMeta((prev) => {
+        if (!prev) return prev;
+        const next = { ...prev, commitBranch: b, commitSha: sha };
+        try {
+          sessionStorage.setItem(`syncdev_github_${roomId}`, JSON.stringify(next));
+        } catch {
+          /* ignore */
+        }
+        return next;
+      });
+    } catch (e) {
+      setGithubHint(e?.message ? String(e.message) : "Commit failed.");
+    } finally {
+      setGithubBusy(null);
+    }
+  }, [githubMeta, commitBranch, commitMessage, files, folders, roomId]);
 
   // ── Mic toggle ─────────────────────────────────────────────────────────────
   const toggleMic = async () => {
@@ -530,8 +724,16 @@ export default function Editor({ username }) {
       {/* ── header ── */}
       <header className="editor-header">
         <div className="editor-header__left">
-          <button className="sidebar-toggle" onClick={() => setSidebarOpen((p) => !p)} title="Toggle sidebar">
+          <button type="button" className="sidebar-toggle" onClick={() => setSidebarOpen((p) => !p)} title="Toggle sidebar">
             {sidebarOpen ? "◀" : "▶"}
+          </button>
+          <button
+            type="button"
+            className="sidebar-toggle"
+            onClick={() => setTerminalOpen((p) => !p)}
+            title="Toggle run / preview panel"
+          >
+            {terminalOpen ? "▼ Run" : "▶ Run"}
           </button>
           <span className="editor-title">SyncDev</span>
           <span className="editor-room">Room: <strong>{roomId}</strong></span>
@@ -539,7 +741,7 @@ export default function Editor({ username }) {
         <div className="editor-header__center">
           {activeFile && (
             <span className="editor-active-file">
-              {activeFile.name}
+              <span className="editor-active-name">{activeFile.name}</span>
               <span className="editor-active-lang">{activeFile.language}</span>
             </span>
           )}
@@ -555,15 +757,15 @@ export default function Editor({ username }) {
       {/* ── media error banner ── */}
       {mediaError && (
         <div className="media-error-banner">
-          ⚠ {mediaError}
-          <button onClick={() => setMediaError(null)} className="media-error-close">✕</button>
+          <span className="media-error-text">⚠ {mediaError}</span>
+          <button type="button" onClick={() => setMediaError(null)} className="media-error-close" aria-label="Dismiss">✕</button>
         </div>
       )}
 
       {/* ── video grid ── */}
       {showVideo && hasAnyVideo && (
         <div className="video-grid">
-          <button className="video-grid-close" onClick={() => setShowVideo(false)}>✕</button>
+          <button type="button" className="video-grid-close" onClick={() => setShowVideo(false)} aria-label="Hide video">✕</button>
           {camOn && (
             <div className="video-tile video-tile--self">
               <video ref={localVideoRef} autoPlay muted playsInline className="video-el video-el--mirror" />
@@ -608,7 +810,7 @@ export default function Editor({ username }) {
               />
               <button
                 className="sidebar-upload-btn"
-                title="Upload folder or files"
+                title="Choose a project folder from your computer (up to 5000 text files, 2MB each)"
                 onClick={() => uploadInputRef.current?.click()}
                 disabled={uploadStatus === "loading"}
               >
@@ -619,7 +821,79 @@ export default function Editor({ username }) {
                   {uploadStatus.skipped.length} file{uploadStatus.skipped.length !== 1 ? "s" : ""} skipped
                 </span>
               )}
+              {uploadStatus?.error && (
+                <span className="sidebar-upload-hint sidebar-upload-hint--error" title={uploadStatus.error}>
+                  {uploadStatus.error}
+                </span>
+              )}
             </div>
+            {Object.keys(files).length > 0 && (
+              <div className="sidebar-github sidebar-export">
+                <p className="sidebar-github__label">Export</p>
+                <div className="sidebar-github__actions">
+                  <button
+                    type="button"
+                    className="sidebar-github__btn"
+                    onClick={handleDownloadCurrentFile}
+                    disabled={!!githubBusy || !activeFileId}
+                  >
+                    Save file
+                  </button>
+                  <button
+                    type="button"
+                    className="sidebar-github__btn"
+                    onClick={handleDownloadZip}
+                    disabled={!!githubBusy}
+                  >
+                    {githubBusy === "zip" ? "Zipping…" : "Download .zip"}
+                  </button>
+                </div>
+                {exportHint && (
+                  <p className="sidebar-github__hint">{exportHint}</p>
+                )}
+              </div>
+            )}
+            {githubMeta && (
+              <div className="sidebar-github">
+                <p className="sidebar-github__label">GitHub</p>
+                <p className="sidebar-github__repo" title={`${githubMeta.owner}/${githubMeta.repo}`}>
+                  {githubMeta.owner}/{githubMeta.repo}
+                </p>
+                <label className="sidebar-github__field">
+                  Branch
+                  <input
+                    className="sidebar-github__input"
+                    value={commitBranch}
+                    onChange={(e) => setCommitBranch(e.target.value)}
+                    placeholder="main"
+                    disabled={!!githubBusy}
+                  />
+                </label>
+                <label className="sidebar-github__field">
+                  Commit message
+                  <input
+                    className="sidebar-github__input"
+                    value={commitMessage}
+                    onChange={(e) => setCommitMessage(e.target.value)}
+                    placeholder="Describe your changes"
+                    disabled={!!githubBusy}
+                  />
+                </label>
+                <div className="sidebar-github__actions">
+                  <button
+                    type="button"
+                    className="sidebar-github__btn sidebar-github__btn--primary"
+                    onClick={handleCommitPush}
+                    disabled={!!githubBusy}
+                  >
+                    {githubBusy === "commit" ? "Pushing…" : "Push to GitHub"}
+                  </button>
+                </div>
+                {githubHint && (
+                  <p className="sidebar-github__hint">{githubHint}</p>
+                )}
+              </div>
+            )}
             <FileTree
               files={files}
               folders={folders}
@@ -644,25 +918,44 @@ export default function Editor({ username }) {
             onActivate={openFile}
             onClose={closeTab}
           />
-          <div className="editor-viewport">
-            {joined ? (
-              <MonacoEditor
-                height="100%"
-                theme="vs-dark"
-                onMount={handleEditorMount}
-                options={{
-                  fontSize: 14,
-                  minimap: { enabled: false },
-                  scrollBeyondLastLine: false,
-                  wordWrap: "on",
-                  fontFamily: "JetBrains Mono, monospace",
-                  renderLineHighlight: "all",
-                  cursorBlinking: "smooth",
-                  automaticLayout: true,
-                }}
-              />
-            ) : (
-              <div className="editor-empty">Connecting…</div>
+          <div className={`editor-main__split${terminalOpen ? " editor-main__split--with-terminal" : ""}`}>
+            <div className="editor-viewport">
+              {joined ? (
+                <MonacoEditor
+                  height="100%"
+                  theme="vs-dark"
+                  path={activeFileId ? `syncdev://files/${activeFileId}` : undefined}
+                  language={files[activeFileId]?.language ?? "plaintext"}
+                  onMount={handleEditorMount}
+                  options={monacoOptions}
+                />
+              ) : (
+                <div className="editor-empty">Connecting…</div>
+              )}
+            </div>
+            {terminalOpen && (
+              <div className="run-terminal-wrap">
+                <Suspense
+                  fallback={(
+                    <div className="run-terminal run-terminal--lazy">
+                      <div className="run-terminal__toolbar">
+                        <span className="run-terminal__hint">Loading terminal…</span>
+                      </div>
+                      <div className="run-terminal__xterm-host run-terminal__xterm-host--placeholder" />
+                    </div>
+                  )}
+                >
+                  <RunTerminal
+                    getCode={getRunCode}
+                    language={activeFile?.language}
+                    fileName={activeFile?.name}
+                    activeFileId={activeFileId}
+                    files={files}
+                    folders={folders}
+                    disabled={!joined}
+                  />
+                </Suspense>
+              </div>
             )}
           </div>
         </div>

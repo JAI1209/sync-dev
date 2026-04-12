@@ -1,10 +1,13 @@
-import { useState } from 'react'
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { Routes, Route, Navigate, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import { jwtDecode } from 'jwt-decode'
 import { AppHeader, AuthScreen, DashboardScreen } from './components/screens'
 import Editor from './pages/Editor'
+import GitHubAuthCallback from './pages/GitHubAuthCallback'
 import logoSrc from './assets/SD.png'
 import { loginUser, googleLogin, registerUser } from './api/auth'
+import { apiUrl } from './api/client'
+import { importGitHubRepo } from './api/github'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 const SESSIONS_KEY = 'syncdev_recent_sessions'
@@ -32,6 +35,9 @@ function addSession(sessions, id) {
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('token'))
   const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams] = useSearchParams()
+  const githubErrorQ = searchParams.get('github_error')
 
   // ── auth screen state ──────────────────────────────────────────────────────
   const [authMode, setAuthMode] = useState('login') // 'login' | 'register' | 'forgot'
@@ -48,6 +54,38 @@ export default function App() {
   const [dashboardBusy, setDashboardBusy] = useState(null)
   const [dashboardBanner, setDashboardBanner] = useState(null)
   const [recentSessions, setRecentSessions] = useState(loadSessions)
+
+  const [githubConnected, setGithubConnected] = useState(false)
+  const [ghOwner, setGhOwner] = useState('')
+  const [ghRepo, setGhRepo] = useState('')
+  const [ghRef, setGhRef] = useState('')
+  const [githubImportBusy, setGithubImportBusy] = useState(false)
+
+  useEffect(() => {
+    if (!token) {
+      setGithubConnected(false)
+      return
+    }
+    let cancelled = false
+    fetch(apiUrl('/api/auth/me'), { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled) setGithubConnected(Boolean(d.githubConnected))
+      })
+      .catch(() => {
+        if (!cancelled) setGithubConnected(false)
+      })
+    return () => { cancelled = true }
+  }, [token])
+
+  useEffect(() => {
+    if (token || location.pathname !== '/login' || !githubErrorQ) return
+    setAuthBanner({
+      tone: 'danger',
+      title: 'GitHub sign-in',
+      detail: decodeURIComponent(githubErrorQ),
+    })
+  }, [githubErrorQ, location.pathname, token])
 
   // ── helpers ────────────────────────────────────────────────────────────────
   const getUsername = () => {
@@ -123,7 +161,7 @@ export default function App() {
     e.preventDefault()
     setAuthBusy('forgot')
     try {
-      const res = await fetch('/api/auth/forgot', {
+      const res = await fetch(apiUrl('/api/auth/forgot'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: forgotForm.email }),
@@ -181,6 +219,63 @@ export default function App() {
     }, 500)
   }
 
+  const handleGitHubImportSubmit = async (e) => {
+    e.preventDefault()
+    setDashboardBanner(null)
+    const o = ghOwner.trim()
+    const r = ghRepo.trim()
+    if (!githubConnected) {
+      setDashboardBanner({
+        tone: 'danger',
+        title: 'GitHub',
+        detail: 'Sign in with GitHub from the login page first.',
+      })
+      return
+    }
+    if (!o || !r) {
+      setDashboardBanner({
+        tone: 'danger',
+        title: 'Repository',
+        detail: 'Enter owner and repository name.',
+      })
+      return
+    }
+    setGithubImportBusy(true)
+    try {
+      const data = await importGitHubRepo(o, r, ghRef.trim() || undefined)
+      const ids = Object.keys(data.files || {})
+      if (!ids.length) {
+        setDashboardBanner({
+          tone: 'danger',
+          title: 'Nothing to import',
+          detail: 'No matching text files found for this branch (check ignores and size limits).',
+        })
+        return
+      }
+      const id = Math.random().toString(36).substring(2, 8).toUpperCase()
+      sessionStorage.setItem(
+        'syncdev_pending_import',
+        JSON.stringify({
+          roomId: id,
+          files: data.files,
+          folders: data.folders || {},
+          orderedFileIds: data.orderedFileIds || ids,
+          github: data.meta || null,
+        })
+      )
+      setRecentSessions((prev) => addSession(prev, id))
+      navigate(`/editor/${id}`)
+    } catch (err) {
+      setDashboardBanner({
+        tone: 'danger',
+        title: 'GitHub import',
+        detail: err.message || 'Request failed',
+      })
+    } finally {
+      setGithubImportBusy(false)
+    }
+  }
+
   // ── shared auth screen props ───────────────────────────────────────────────
   const authProps = {
     mode: authMode,
@@ -225,6 +320,8 @@ export default function App() {
           }
         />
 
+        <Route path="/auth/github/callback" element={<GitHubAuthCallback />} />
+
         <Route
           path="/register"
           element={
@@ -267,6 +364,15 @@ export default function App() {
                   onReconnect={handleReconnect}
                   reconnectingId={reconnectingId}
                   recentSessions={recentSessions}
+                  githubConnected={githubConnected}
+                  githubImportBusy={githubImportBusy}
+                  ghOwner={ghOwner}
+                  ghRepo={ghRepo}
+                  ghRef={ghRef}
+                  onGhOwnerChange={setGhOwner}
+                  onGhRepoChange={setGhRepo}
+                  onGhRefChange={setGhRef}
+                  onGitHubImportSubmit={handleGitHubImportSubmit}
                 />
               </>
             ) : <Navigate to="/login" />

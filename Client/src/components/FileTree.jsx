@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { fileIcon, extToLanguage } from "../hooks/useFileSystem";
 
 // ── small icon components ─────────────────────────────────────────────────────
 function IconFolder({ open }) {
