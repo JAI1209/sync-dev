@@ -341,7 +341,7 @@ Engineering upgrades planned:
 Frontend Developer
 UI Architecture & Design Systems
 
-**Prahlad Kumar**
+**Prahlad Kumar Jha**
 Frontend Developer
 Component Development
 
@@ -361,7 +361,7 @@ Real Time Communication
 
 ## System Architecture & DevOps
 
-**Priya Prajapati**
+**Prahlad and Jai**
 System Architect
 CI/CD Pipeline Engineering
 

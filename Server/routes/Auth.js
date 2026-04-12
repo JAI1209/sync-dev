@@ -22,7 +22,9 @@ router.post('/google', async (req, res) => {
 
     let user = await User.findOne({ username: email })
     if (!user) {
-      user = new User({ username: email, password: email + process.env.JWT_SECRET })
+      const salt = await bcrypt.genSalt(10)
+      const hashedPassword = await bcrypt.hash(email + process.env.JWT_SECRET, salt)
+      user = new User({ username: email, email, password: hashedPassword })
       await user.save()
     }
 

@@ -1,4 +1,4 @@
-const BASE = `${import.meta.env.VITE_API_URL}/api/auth` || "http://localhost:5173/api/auth";
+const BASE = "/api/auth";
 
 export async function loginUser(username, password) {
   const res = await fetch(`${BASE}/login`, {
@@ -6,14 +6,14 @@ export async function loginUser(username, password) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
   });
-  return res.json(); // returns { token } or { msg }
+  return res.json();
 }
 
-export async function registerUser(username, password) {
+export async function registerUser(username, password, email) {
   const res = await fetch(`${BASE}/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, email }),
   });
   return res.json();
 }
@@ -23,6 +23,6 @@ export async function googleLogin(credential) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ credential }),
-  })
-  return res.json()
+  });
+  return res.json();
 }
