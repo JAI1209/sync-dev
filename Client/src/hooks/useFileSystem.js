@@ -1,8 +1,9 @@
 import { useState, useCallback } from "react";
+import { generateNodeId } from "../utils/ids";
 
 // ── Helpers (exported so FileTree / TabBar can use them too) ──────────────────
 export function uid() {
-  return "f_" + Math.random().toString(36).slice(2, 10);
+  return generateNodeId("f");
 }
 
 export const EXT_LANG = {

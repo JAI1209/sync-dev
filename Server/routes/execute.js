@@ -78,66 +78,27 @@ function buildSandbox() {
   };
 }
 
+/**
+ * CRITICAL SECURITY NOTICE:
+ * Server-side code execution via vm.runInNewContext has been DISABLED.
+ * 
+ * The Node.js vm module is NOT a security sandbox. Users can escape via:
+ *   Promise.resolve().constructor.constructor('return process')()
+ *   setTimeout.constructor('return process')()
+ * 
+ * This allows reading process.env (MONGODB_URI, JWT_SECRET, API keys) 
+ * and arbitrary code execution.
+ * 
+ * Use WebContainer in the frontend instead, or implement proper isolation
+ * with isolated-vm package or sandboxed Docker containers.
+ */
+
 router.post("/run", authJwt, (req, res) => {
-  const code = req.body.code;
-  const language = String(req.body.language || "javascript").toLowerCase();
-
-  if (code == null || typeof code !== "string") {
-    return res.status(400).json({ msg: "code is required" });
-  }
-  if (Buffer.byteLength(code, "utf8") > MAX_CODE_BYTES) {
-    return res.status(400).json({ msg: "Code exceeds size limit." });
-  }
-
-  let js = code;
-  if (language === "typescript" || language === "ts" || language === "tsx") {
-    if (!ts) {
-      return res.status(503).json({
-        msg: "TypeScript is not installed on the server. Run: npm install typescript (in Server/).",
-      });
-    }
-    try {
-      const out = ts.transpileModule(code, {
-        compilerOptions: {
-          module: ts.ModuleKind.CommonJS,
-          target: ts.ScriptTarget.ES2020,
-          jsx: language === "tsx" ? ts.JsxEmit.React : ts.JsxEmit.None,
-        },
-      });
-      js = out.outputText;
-    } catch (e) {
-      return res.status(400).json({
-        ok: false,
-        logs: [],
-        error: e.message || "TypeScript transpile failed",
-      });
-    }
-  }
-
-  const { logs, sandbox } = buildSandbox();
-  if (language === "tsx") {
-    sandbox.React = {
-      createElement: () => null,
-      Fragment: Symbol.for("react.fragment"),
-    };
-  }
-  const timeout = Math.min(
-    Number(process.env.EXECUTE_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS,
-    30000
-  );
-
-  const wrapped = `"use strict";\n(function(){\n${js}\n})();`;
-
-  try {
-    vm.runInNewContext(wrapped, sandbox, {
-      timeout,
-      displayErrors: true,
-    });
-    return res.json({ ok: true, logs, error: null });
-  } catch (e) {
-    const msg = e && e.message ? e.message : String(e);
-    return res.json({ ok: false, logs, error: msg });
-  }
+  return res.status(503).json({
+    ok: false,
+    logs: [],
+    error: "Server-side code execution disabled for security. Use WebContainer in browser instead.",
+  });
 });
 
 module.exports = router;

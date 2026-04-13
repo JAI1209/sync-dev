@@ -1,3 +1,5 @@
+import { generateNodeId } from "./ids";
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 const MAX_FILE_SIZE  = 2 * 1024 * 1024; // 2 MB per file (align with server GitHub import default)
 const MAX_FILE_COUNT = 5000;
@@ -30,7 +32,7 @@ function extToLanguage(name) {
 }
 
 function uid() {
-  return 'f_' + Math.random().toString(36).slice(2, 10);
+  return generateNodeId("f");
 }
 
 /** Parent folders before children — safe order for socket `create-folder` broadcasts. */
@@ -133,3 +135,4 @@ function readFileAsText(file) {
     reader.readAsText(file);
   });
 }
+

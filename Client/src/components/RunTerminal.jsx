@@ -110,7 +110,12 @@ export default function RunTerminal({ getCode, language, fileName, activeFileId,
   }, []);
 
   const openDevPreviewTab = useCallback(() => {
-    if (previewUrl) window.open(previewUrl, "_blank", "noopener,noreferrer");
+    if (previewUrl) {
+      window.open(previewUrl, "_blank", "noopener,noreferrer");
+    } else {
+      // Fallback: try localhost if WebContainer preview isn't ready
+      window.open("http://localhost:5173", "_blank", "noopener,noreferrer");
+    }
   }, [previewUrl]);
 
   useEffect(() => {
@@ -172,7 +177,37 @@ export default function RunTerminal({ getCode, language, fileName, activeFileId,
 
         setWcPhase("booting");
         setWcError("");
-        const wc = await getWebContainer();
+
+        // WebContainer with hard timeout - fails fast if hanging
+        const BOOT_TIMEOUT_MS = 10000;
+        let bootTimeoutId;
+        
+        const bootPromise = Promise.race([
+          getWebContainer(),
+          new Promise((_, reject) => {
+            bootTimeoutId = setTimeout(() => {
+              reject(new Error(`WebContainer boot timeout after ${BOOT_TIMEOUT_MS}ms`));
+            }, BOOT_TIMEOUT_MS);
+          }),
+        ]);
+
+        let wc;
+        try {
+          wc = await bootPromise;
+          clearTimeout(bootTimeoutId);
+        } catch (bootErr) {
+          clearTimeout(bootTimeoutId);
+          if (!cancelled) {
+            setWcPhase("error");
+            setWcError("WebContainer failed — use external browser");
+            term.writeln(`\r\n\x1b[33m[WebContainer Error]\x1b[0m ${bootErr.message}`);
+            term.writeln("\x1b[36m→ Auto-opening localhost:5173...\x1b[0m\r\n");
+            window.open("http://localhost:5173", "_blank", "noopener,noreferrer");
+            // Don't throw - we handled it gracefully
+            return;
+          }
+          return;
+        }
         if (cancelled) return;
 
         unsubscribeServer = wc.on("server-ready", (port, url) => {
@@ -262,23 +297,21 @@ export default function RunTerminal({ getCode, language, fileName, activeFileId,
         >
           {syncBusy ? "Syncing…" : "⬆ Sync workspace"}
         </button>
-        {previewUrl && (
-          <button
-            type="button"
-            className="run-terminal__btn run-terminal__btn--accent"
-            onClick={openDevPreviewTab}
-          >
-            Open preview tab
-          </button>
-        )}
+        <button
+          type="button"
+          className="run-terminal__btn run-terminal__btn--accent"
+          onClick={openDevPreviewTab}
+        >
+          {previewUrl ? "Open preview tab" : "Open localhost:5173"}
+        </button>
         <span className="run-terminal__hint">
           {isHtml
             ? "HTML run inlines linked CSS/JS from the file tree (like Live Preview)."
             : "Quick run uses the server sandbox (console only)."}
           {" "}
-          {wcPhase === "booting" && "Starting in-browser Node…"}
+          {wcPhase === "booting" && "Starting in-browser Node… (fails after 15s)"}
           {wcPhase === "ready" && "Terminal: full npm / Node in WebContainer."}
-          {wcPhase === "error" && `WebContainer: ${wcError}`}
+          {wcPhase === "error" && `⚠️ ${wcError} — Click "Open localhost:5173"`}
         </span>
       </div>
 

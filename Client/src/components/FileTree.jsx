@@ -123,7 +123,12 @@ export default function FileTree({
   }, []);
 
   // ── build tree nodes sorted: folders first, then files, alpha ─────────────
-  function renderChildren(parentId, depth) {
+  // Bug 18: Added visited set to prevent infinite recursion from circular parentId
+  function renderChildren(parentId, depth, visited = new Set()) {
+    // Cycle detection: prevent infinite recursion
+    if (visited.has(parentId)) return null;
+    visited.add(parentId);
+    
     const childFolders = Object.values(folders)
       .filter((f) => f.parentId === parentId)
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -170,7 +175,7 @@ export default function FileTree({
                       />
                     </div>
                   )}
-                  {renderChildren(folder.id, depth + 1)}
+                  {renderChildren(folder.id, depth + 1, visited)}
                 </div>
               )}
             </div>

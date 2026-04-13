@@ -23,6 +23,15 @@ if (!githubClientId || !githubClientSecret) {
   console.warn("GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET not set — GitHub login and repo import are disabled.");
 }
 
+const smtpHost = process.env.SMTP_HOST || "";
+const smtpPort = Number(process.env.SMTP_PORT) || 587;
+const smtpUser = process.env.SMTP_USER || "";
+const smtpPass = process.env.SMTP_PASS || "";
+
+if (!smtpHost) {
+  console.warn("SMTP_HOST not set — password reset emails will be logged to console instead of sent.");
+}
+
 module.exports = {
   jwtSecret,
   googleClientId,
@@ -30,4 +39,8 @@ module.exports = {
   githubClientId,
   githubClientSecret,
   githubRedirectUri,
+  smtpHost,
+  smtpPort,
+  smtpUser,
+  smtpPass,
 };

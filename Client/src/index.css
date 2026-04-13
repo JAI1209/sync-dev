@@ -1305,6 +1305,7 @@ button {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0; /* CRITICAL: allows flex child to shrink for scrolling */
   overflow: hidden;
   user-select: none;
 }
@@ -1336,6 +1337,7 @@ button {
 .ft-header__btn:hover { color: var(--text); border-color: var(--primary); }
 .ft-body {
   flex: 1;
+  min-height: 0; /* CRITICAL: allows flex child to shrink for scrolling */
   overflow-y: auto;
   overflow-x: hidden;
   padding: 4px 0;

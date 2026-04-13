@@ -5,7 +5,7 @@
   "license": "ISC",
   "author": "",
   "type": "commonjs",
-  "main": "Server.js",
+  "main": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
@@ -22,7 +22,11 @@
     "mongodb": "^7.1.1",
     "mongoose": "^9.4.1",
     "socket.io": "^4.8.3",
-    "typescript": "^6.0.2"
+    "yjs": "^13.6.24",
+    "y-protocols": "^1.0.6",
+    "ioredis": "^5.6.1",
+    "winston": "^3.17.0",
+    "morgan": "^1.10.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
