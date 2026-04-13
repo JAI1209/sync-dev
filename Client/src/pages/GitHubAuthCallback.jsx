@@ -1,6 +1,5 @@
 import { useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { saveAuthTokens } from "../api/client";
 
 export default function GitHubAuthCallback() {
   const [searchParams] = useSearchParams();
@@ -8,10 +7,9 @@ export default function GitHubAuthCallback() {
 
   useEffect(() => {
     const token = searchParams.get("token");
-    const refreshToken = searchParams.get("refreshToken");
     const ghErr = searchParams.get("github_error");
     if (token) {
-      saveAuthTokens(token, refreshToken || undefined);
+      localStorage.setItem("token", token);
       navigate("/dashboard", { replace: true });
       return;
     }

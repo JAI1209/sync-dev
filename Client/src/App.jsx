@@ -3,13 +3,11 @@ import { Routes, Route, Navigate, useNavigate, useSearchParams, useLocation } fr
 import { jwtDecode } from 'jwt-decode'
 import { AppHeader, AuthScreen, DashboardScreen } from './components/screens'
 import Editor from './pages/Editor'
-import ErrorBoundary from './components/ErrorBoundary'
 import GitHubAuthCallback from './pages/GitHubAuthCallback'
 import logoSrc from './assets/SD.png'
 import { loginUser, googleLogin, registerUser } from './api/auth'
-import { apiUrl, authFetch, clearAuthTokens, getAccessToken, saveAuthTokens } from './api/client'
+import { apiUrl } from './api/client'
 import { importGitHubRepo } from './api/github'
-import { generateRoomId } from './utils/ids'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 const SESSIONS_KEY = 'syncdev_recent_sessions'
@@ -69,21 +67,10 @@ export default function App() {
       return
     }
     let cancelled = false
-    authFetch('/api/auth/me')
-      .then(async (r) => {
-        const d = await r.json().catch(() => ({}))
-        if (!r.ok) {
-          if (!cancelled) {
-            setGithubConnected(false)
-            if (!getAccessToken()) setToken(null)
-          }
-          return
-        }
-        if (!cancelled) {
-          setGithubConnected(Boolean(d.githubConnected))
-          const latestToken = getAccessToken()
-          if (latestToken && latestToken !== token) setToken(latestToken)
-        }
+    fetch(apiUrl('/api/auth/me'), { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled) setGithubConnected(Boolean(d.githubConnected))
       })
       .catch(() => {
         if (!cancelled) setGithubConnected(false)
@@ -106,14 +93,13 @@ export default function App() {
     catch { return 'engineer' }
   }
 
-  const saveToken = (accessToken, refreshToken) => {
-    // Bug 7 Fix: Remove race window - save tokens immediately
-    saveAuthTokens(accessToken, refreshToken)
-    setToken(accessToken)
+  const saveToken = (t) => {
+    localStorage.setItem('token', t)
+    setToken(t)
   }
 
   const handleLogout = () => {
-    clearAuthTokens()
+    localStorage.removeItem('token')
     setToken(null)
     navigate('/login')
   }
@@ -126,33 +112,24 @@ export default function App() {
     e.preventDefault()
     setAuthBanner(null)
     setAuthBusy('login')
-    try {
-      const data = await loginUser(loginForm.username, loginForm.password)
-      if (data.token) {
-        saveToken(data.token, data.refreshToken)
-        navigate('/dashboard')
-      } else {
-        setAuthBanner({ tone: 'danger', title: 'Auth failed', detail: data.msg || 'Invalid credentials' })
-      }
-    } catch (err) {
-      setAuthBanner({ tone: 'danger', title: 'Network error', detail: err.message || 'Unable to reach server' })
-    } finally {
-      setAuthBusy(null)
+    const data = await loginUser(loginForm.username, loginForm.password)
+    setAuthBusy(null)
+    if (data.token) {
+      saveToken(data.token)
+      navigate('/dashboard')
+    } else {
+      setAuthBanner({ tone: 'danger', title: 'Auth failed', detail: data.msg || 'Invalid credentials' })
     }
   }
 
   const handleGoogleSuccess = async (credentialResponse) => {
     setAuthBanner(null)
-    try {
-      const data = await googleLogin(credentialResponse.credential)
-      if (data.token) {
-        saveToken(data.token, data.refreshToken)
-        navigate('/dashboard')
-      } else {
-        setAuthBanner({ tone: 'danger', title: 'Google login failed', detail: data.msg || 'Try again or use username/password' })
-      }
-    } catch (err) {
-      setAuthBanner({ tone: 'danger', title: 'Network error', detail: err.message || 'Unable to reach server' })
+    const data = await googleLogin(credentialResponse.credential)
+    if (data.token) {
+      saveToken(data.token)
+      navigate('/dashboard')
+    } else {
+      setAuthBanner({ tone: 'danger', title: 'Google login failed', detail: 'Try again or use username/password' })
     }
   }
 
@@ -167,18 +144,13 @@ export default function App() {
       return
     }
     setAuthBusy('register')
-    try {
-      const data = await registerUser(registerForm.username, registerForm.password, registerForm.email)
-      if (data.token) {
-        saveToken(data.token, data.refreshToken)
-        navigate('/dashboard')
-      } else {
-        setAuthBanner({ tone: 'danger', title: 'Registration failed', detail: data.msg || 'Try a different username' })
-      }
-    } catch (err) {
-      setAuthBanner({ tone: 'danger', title: 'Network error', detail: err.message || 'Unable to reach server' })
-    } finally {
-      setAuthBusy(null)
+    const data = await registerUser(registerForm.username, registerForm.password, registerForm.email)
+    setAuthBusy(null)
+    if (data.token) {
+      setAuthBanner({ tone: 'success', title: 'Account created', detail: 'You can now sign in' })
+      setAuthMode('login')
+    } else {
+      setAuthBanner({ tone: 'danger', title: 'Registration failed', detail: data.msg || 'Try a different username' })
     }
   }
 
@@ -214,7 +186,7 @@ export default function App() {
   // ── dashboard handlers ─────────────────────────────────────────────────────
   const handleInitializeSession = () => {
     setDashboardBusy('create')
-    const id = generateRoomId()
+    const id = Math.random().toString(36).substring(2, 8).toUpperCase()
     setTimeout(() => {
       setDashboardBusy(null)
       setRecentSessions(prev => addSession(prev, id))
@@ -280,7 +252,7 @@ export default function App() {
         })
         return
       }
-      const id = generateRoomId()
+      const id = Math.random().toString(36).substring(2, 8).toUpperCase()
       sessionStorage.setItem(
         'syncdev_pending_import',
         JSON.stringify({
@@ -324,7 +296,6 @@ export default function App() {
     // Google OAuth — pass the raw handler; AuthScreen renders GoogleLogin component
     onGoogleSuccess: handleGoogleSuccess,
     onGoogleError: () => setAuthBanner({ tone: 'danger', title: 'Google login failed' }),
-    onGitHubClick: () => setAuthBusy('github'),
   }
 
   return (
@@ -411,11 +382,7 @@ export default function App() {
         {/* ── EDITOR (unchanged — your working socket logic) ── */}
         <Route
           path="/editor/:roomId"
-          element={token ? (
-            <ErrorBoundary>
-              <Editor username={getUsername()} />
-            </ErrorBoundary>
-          ) : <Navigate to="/login" />}
+          element={token ? <Editor username={getUsername()} /> : <Navigate to="/login" />}
         />
 
         <Route path="*" element={<Navigate to={token ? '/dashboard' : '/login'} />} />

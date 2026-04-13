@@ -1,4 +1,4 @@
-import { authFetch } from "./client";
+import { apiUrl } from "./client";
 
 /** Map Monaco language + filename to server runner language id. */
 export function mapRunLanguage(monacoLanguage, fileName) {
@@ -17,10 +17,12 @@ export function mapRunLanguage(monacoLanguage, fileName) {
  * @param {string} language - monaco language id e.g. javascript, typescript
  */
 export async function executeCode(code, language) {
-  const res = await authFetch("/api/execute/run", {
+  const token = localStorage.getItem("token");
+  const res = await fetch(apiUrl("/api/execute/run"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ code, language }),
   });

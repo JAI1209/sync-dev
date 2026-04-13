@@ -83,7 +83,6 @@ function LoginForm({
   showPassword,
   onGoogleSuccess,  // NEW — passed from App.jsx
   onGoogleError,    // NEW — passed from App.jsx
-  onGitHubClick,    // NEW — GitHub loading handler
 }) {
   return (
     <>
@@ -166,20 +165,11 @@ function LoginForm({
         <OAuthButton
           provider="github"
           type="button"
-          disabled={authBusy === 'github'}
           onClick={() => {
-            onGitHubClick?.();
             window.location.assign(apiUrl("/api/auth/github/start"));
           }}
         >
-          {authBusy === 'github' ? (
-            <>
-              <TerminalSpinner />
-              Redirecting to GitHub…
-            </>
-          ) : (
-            'Continue with GitHub'
-          )}
+          Continue with GitHub
         </OAuthButton>
       </div>
     </>

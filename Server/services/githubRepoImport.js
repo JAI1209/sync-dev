@@ -30,22 +30,6 @@ const EXT_LANG = {
   toml: "plaintext", lock: "plaintext",
 };
 
-// Bug E: Concurrent pool helper for parallel blob fetching
-async function mapPool(items, concurrency, fn) {
-  const results = new Array(items.length);
-  let i = 0;
-  async function worker() {
-    for (;;) {
-      const idx = i++;
-      if (idx >= items.length) break;
-      results[idx] = await fn(items[idx], idx);
-    }
-  }
-  const n = Math.min(concurrency, Math.max(1, items.length));
-  await Promise.all(Array.from({ length: n }, () => worker()));
-  return results;
-}
-
 function uid() {
   return "f_" + Math.random().toString(36).slice(2, 10);
 }
@@ -140,8 +124,6 @@ async function importRepoFromGitHub({ owner, repo, ref, token }) {
   const blobs = (tree.tree || []).filter((e) => e.type === "blob" && e.path);
   const orderedFileIds = [];
 
-  // First pass: filter valid entries without fetching
-  const entriesToFetch = [];
   for (const entry of blobs) {
     if (orderedFileIds.length >= MAX_FILE_COUNT) {
       skipped.push(
@@ -162,12 +144,6 @@ async function importRepoFromGitHub({ owner, repo, ref, token }) {
       continue;
     }
 
-    entriesToFetch.push({ entry, relPath });
-  }
-
-  // Bug E: Fetch blobs concurrently with limited concurrency (5)
-  const CONCURRENCY = 5;
-  await mapPool(entriesToFetch, CONCURRENCY, async ({ entry, relPath }) => {
     let blob;
     try {
       blob = await ghFetchJson(
@@ -176,12 +152,12 @@ async function importRepoFromGitHub({ owner, repo, ref, token }) {
       );
     } catch (e) {
       skipped.push(`${relPath.split("/").pop()} (could not read: ${e.message})`);
-      return;
+      continue;
     }
 
     if (blob.encoding !== "base64" || !blob.content) {
       skipped.push(`${relPath.split("/").pop()} (non-text blob)`);
-      return;
+      continue;
     }
 
     let content;
@@ -189,12 +165,12 @@ async function importRepoFromGitHub({ owner, repo, ref, token }) {
       content = Buffer.from(blob.content.replace(/\n/g, ""), "base64").toString("utf8");
     } catch {
       skipped.push(`${relPath.split("/").pop()} (decode error)`);
-      return;
+      continue;
     }
 
     if (content.includes("\u0000")) {
       skipped.push(`${relPath.split("/").pop()} (binary)`);
-      return;
+      continue;
     }
 
     const pathParts = relPath.split("/").filter(Boolean);
@@ -217,7 +193,7 @@ async function importRepoFromGitHub({ owner, repo, ref, token }) {
       repoPath,
     };
     orderedFileIds.push(id);
-  });
+  }
 
   const meta = {
     owner,

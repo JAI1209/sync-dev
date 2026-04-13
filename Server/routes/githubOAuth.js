@@ -128,7 +128,6 @@ router.get("/callback", async (req, res) => {
         username: candidate,
         email: String(email).toLowerCase(),
         password: hashedPassword,
-        authProvider: 'github', // GitHub Bug 3: Set authProvider
         githubId,
         githubUsername: login,
         githubAccessToken: accessToken,
@@ -144,24 +143,14 @@ router.get("/callback", async (req, res) => {
     await user.save();
 
     const payload = { user: { id: user.id, username: user.username } };
-    const appToken = jwt.sign(payload, config.jwtSecret, { expiresIn: 3600 });
-    const refreshTokenApp = jwt.sign(
-      { ...payload, type: "refresh" },
-      config.jwtSecret,
-      { expiresIn: "7d" }
-    );
-
-    if (!appToken) {
-      console.error("GitHub: Failed to sign JWT");
-      return failRedirect("Could not create session.");
-    }
-
-    // GitHub Bug 1: Include refreshToken so client can refresh after 1 hour
-    const q = new URLSearchParams({
-      token: appToken,
-      refreshToken: refreshTokenApp,
+    jwt.sign(payload, config.jwtSecret, { expiresIn: 3600 }, (err, appToken) => {
+      if (err) {
+        console.error(err);
+        return failRedirect("Could not create session.");
+      }
+      const q = new URLSearchParams({ token: appToken });
+      res.redirect(`${config.clientOrigin}/auth/github/callback?${q.toString()}`);
     });
-    res.redirect(`${config.clientOrigin}/auth/github/callback?${q.toString()}`);
   } catch (e) {
     console.error("GitHub user save", e);
     if (e.code === 11000) {
