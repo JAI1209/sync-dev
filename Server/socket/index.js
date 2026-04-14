@@ -24,9 +24,10 @@ function initSocket(httpServer) {
 
     try {
       const decoded = jwt.verify(token, config.jwtSecret);
-      socket.auth = decoded;
-      socket.userId = decoded.user?.id;
-      socket.username = decoded.user?.username || "anonymous";
+      const authUser = decoded.user?.id ? decoded.user : decoded.user?.user ?? decoded.user;
+      socket.auth = { ...decoded, user: authUser };
+      socket.userId = authUser?.id;
+      socket.username = authUser?.username || "anonymous";
       next();
     } catch {
       return next(new Error("Invalid or expired token"));

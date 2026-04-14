@@ -13,12 +13,12 @@ async function comparePassword(plain, hash) {
   return bcrypt.compare(plain, hash);
 }
 
-function generateAccessToken(user) {
-  return jwt.sign({ user }, config.jwtSecret, { expiresIn: ACCESS_TOKEN_EXPIRY });
+function generateAccessToken(payload) {
+  return jwt.sign(payload, config.jwtSecret, { expiresIn: ACCESS_TOKEN_EXPIRY });
 }
 
-function generateRefreshToken(user) {
-  return jwt.sign({ user, type: 'refresh' }, config.jwtSecret, {
+function generateRefreshToken(payload) {
+  return jwt.sign({ ...payload, type: 'refresh' }, config.jwtSecret, {
     expiresIn: REFRESH_TOKEN_EXPIRY,
   });
 }

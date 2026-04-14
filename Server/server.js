@@ -14,6 +14,7 @@ const rbacRoutes = require("./routes/rbac");
 const { morganMiddleware, logger } = require("./logger");
 const { rateLimitMiddleware, sanitizeInput, securityHeaders } = require("./middleware/security");
 const { connectDB } = require("./config/db");
+const { disconnectRedis } = require("./config/redis");
 const { initSocket } = require("./socket");
 const roomService = require("./services/roomService");
 
@@ -78,7 +79,11 @@ async function startServer() {
 }
 
 startServer();
-process.on("SIGINT", async () => { await mongoose.connection.close(); process.exit(0); });
+process.on("SIGINT", async () => {
+  await mongoose.connection.close();
+  await disconnectRedis();
+  process.exit(0);
+});
 
 
 

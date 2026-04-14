@@ -59,6 +59,36 @@ export default function Editor({ username }) {
     setEditorKey,
   });
 
+  const handleCreateFile = useCallback((name, parentId) => {
+    const file = createFile(name, parentId);
+    socketRef.current?.emit("create-file", { roomId, file });
+  }, [createFile, roomId, socketRef]);
+
+  const handleCreateFolder = useCallback((name, parentId) => {
+    const folder = createFolder(name, parentId);
+    socketRef.current?.emit("create-folder", { roomId, folder });
+  }, [createFolder, roomId, socketRef]);
+
+  const handleRenameFile = useCallback((fileId, name) => {
+    renameFile(fileId, name);
+    socketRef.current?.emit("rename-file", { roomId, fileId, name });
+  }, [renameFile, roomId, socketRef]);
+
+  const handleRenameFolder = useCallback((folderId, name) => {
+    renameFolder(folderId, name);
+    socketRef.current?.emit("rename-folder", { roomId, folderId, name });
+  }, [renameFolder, roomId, socketRef]);
+
+  const handleDeleteFile = useCallback((fileId) => {
+    deleteFile(fileId);
+    socketRef.current?.emit("delete-file", { roomId, fileId });
+  }, [deleteFile, roomId, socketRef]);
+
+  const handleDeleteFolder = useCallback((folderId) => {
+    deleteFolder(folderId, folders);
+    socketRef.current?.emit("delete-folder", { roomId, folderId, folders });
+  }, [deleteFolder, folders, roomId, socketRef]);
+
   const usersRef = useRef([]);
 
   // ── Track when files are loaded ─────────────────────────────────────────────
@@ -293,12 +323,12 @@ export default function Editor({ username }) {
               folders={folders}
               activeFileId={activeFileId}
               onOpenFile={openFile}
-              onCreateFile={createFile}
-              onCreateFolder={createFolder}
-              onRenameFile={renameFile}
-              onRenameFolder={renameFolder}
-              onDeleteFile={deleteFile}
-              onDeleteFolder={deleteFolder}
+              onCreateFile={handleCreateFile}
+              onCreateFolder={handleCreateFolder}
+              onRenameFile={handleRenameFile}
+              onRenameFolder={handleRenameFolder}
+              onDeleteFile={handleDeleteFile}
+              onDeleteFolder={handleDeleteFolder}
               userRole={userRole}
             />
             <div className="sidebar-upload">

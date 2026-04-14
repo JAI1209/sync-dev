@@ -104,7 +104,11 @@ export function useSocket({
       socket.on("disconnect", (reason) => {
         setSocketStatus("disconnected");
         setSocketIssue(`Disconnected (${reason})`);
-        setJoined(false);
+        // Don't set joined=false on temporary disconnects.
+        // reconnect will emit join-room and re-sync state.
+        if (reason === "io server disconnect") {
+          setJoined(false); // only hard-reset on server-forced disconnect
+        }
       });
 
       socket.on("connect_error", async (err) => {

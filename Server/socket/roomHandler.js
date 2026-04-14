@@ -7,19 +7,19 @@ async function handleJoinRoom(io, socket, { roomId }) {
   const userId = socket.auth?.user?.id;
   const username = socket.auth?.user?.username || "anonymous";
 
-  let room = roomService.getRoom(roomId);
+  let room = await roomService.getRoom(roomId);
   if (!room) {
     const dbRoom = await roomService.loadRoomFromDB(roomId);
     if (dbRoom) {
       console.log(
         `[Join] Loaded room ${roomId} from DB: ${Object.keys(dbRoom.files).length} files, ${Object.keys(dbRoom.folders).length} folders`
       );
-      roomService.setRoom(roomId, dbRoom);
+      await roomService.setRoom(roomId, dbRoom);
       room = dbRoom;
     } else {
       console.log(`[Join] Room ${roomId} not in DB, creating default`);
       room = roomService.makeDefaultRoom();
-      roomService.setRoom(roomId, room);
+      await roomService.setRoom(roomId, room);
     }
   } else {
     console.log(`[Join] Room ${roomId} already in memory: ${Object.keys(room.files).length} files`);
@@ -104,7 +104,7 @@ async function handleFileChange(io, socket, { roomId, fileId, content }) {
       return;
     }
 
-    const room = roomService.getRoom(roomId);
+    const room = await roomService.getRoom(roomId);
     if (!room) {
       console.log(`[Socket] file-change: room ${roomId} not found`);
       return;
@@ -115,6 +115,7 @@ async function handleFileChange(io, socket, { roomId, fileId, content }) {
     }
 
     room.files[fileId].content = content;
+    await roomService.setRoom(roomId, room);
     console.log(`[Socket] Broadcasting file-update to room ${roomId}`);
     socket.to(roomId).emit("file-update", { fileId, content });
     roomService.persistRoom(roomId);
@@ -131,7 +132,7 @@ async function handleCreateFile(io, socket, { roomId, file }) {
     return;
   }
 
-  const room = roomService.getRoom(roomId);
+  const room = await roomService.getRoom(roomId);
   if (!room) {
     socket.emit("error", { msg: "Room not found" });
     return;
@@ -148,6 +149,7 @@ async function handleCreateFile(io, socket, { roomId, file }) {
   }
 
   room.files[file.id] = file;
+  await roomService.setRoom(roomId, room);
   socket.to(roomId).emit("file-created", file);
   roomService.persistRoom(roomId);
 }
@@ -159,7 +161,7 @@ async function handleCreateFolder(io, socket, { roomId, folder }) {
     return;
   }
 
-  const room = roomService.getRoom(roomId);
+  const room = await roomService.getRoom(roomId);
   if (!room) {
     socket.emit("error", { msg: "Room not found" });
     return;
@@ -176,6 +178,7 @@ async function handleCreateFolder(io, socket, { roomId, folder }) {
   }
 
   room.folders[folder.id] = folder;
+  await roomService.setRoom(roomId, room);
   socket.to(roomId).emit("folder-created", folder);
   roomService.persistRoom(roomId);
 }
@@ -187,12 +190,13 @@ async function handleRenameFile(io, socket, { roomId, fileId, name }) {
     return;
   }
 
-  const room = roomService.getRoom(roomId);
+  const room = await roomService.getRoom(roomId);
   if (!room?.files[fileId]) return;
 
   room.files[fileId].name = name;
   const ext = name.split(".").pop().toLowerCase();
   room.files[fileId].language = extToLanguage(ext);
+  await roomService.setRoom(roomId, room);
 
   socket.to(roomId).emit("file-renamed", {
     fileId,
@@ -209,10 +213,11 @@ async function handleRenameFolder(io, socket, { roomId, folderId, name }) {
     return;
   }
 
-  const room = roomService.getRoom(roomId);
+  const room = await roomService.getRoom(roomId);
   if (!room?.folders[folderId]) return;
 
   room.folders[folderId].name = name;
+  await roomService.setRoom(roomId, room);
   socket.to(roomId).emit("folder-renamed", { folderId, name });
   roomService.persistRoom(roomId);
 }
@@ -224,7 +229,7 @@ async function handleDeleteFile(io, socket, { roomId, fileId }) {
     return;
   }
 
-  const room = roomService.getRoom(roomId);
+  const room = await roomService.getRoom(roomId);
   if (!room?.files[fileId]) return;
 
   delete room.files[fileId];
@@ -232,6 +237,7 @@ async function handleDeleteFile(io, socket, { roomId, fileId }) {
     const remaining = Object.keys(room.files);
     room.activeFile = remaining[0] || null;
   }
+  await roomService.setRoom(roomId, room);
 
   socket.to(roomId).emit("file-deleted", { fileId, newActiveFile: room.activeFile });
   roomService.persistRoom(roomId);
@@ -244,7 +250,7 @@ async function handleDeleteFolder(io, socket, { roomId, folderId }) {
     return;
   }
 
-  const room = roomService.getRoom(roomId);
+  const room = await roomService.getRoom(roomId);
   if (!room) return;
 
   const { deletedFiles, deletedFolders } = roomService.deleteFolder(room, folderId);
@@ -252,6 +258,7 @@ async function handleDeleteFolder(io, socket, { roomId, folderId }) {
     const remaining = Object.keys(room.files);
     room.activeFile = remaining[0] || null;
   }
+  await roomService.setRoom(roomId, room);
 
   socket.to(roomId).emit("folder-deleted", {
     folderId,
@@ -262,10 +269,11 @@ async function handleDeleteFolder(io, socket, { roomId, folderId }) {
   roomService.persistRoom(roomId);
 }
 
-function handleSwitchFile(io, socket, { roomId, fileId }) {
-  const room = roomService.getRoom(roomId);
+async function handleSwitchFile(io, socket, { roomId, fileId }) {
+  const room = await roomService.getRoom(roomId);
   if (!room?.files[fileId]) return;
   room.activeFile = fileId;
+  await roomService.setRoom(roomId, room);
   socket.to(roomId).emit("file-switched", { fileId });
   roomService.persistRoom(roomId);
 }
@@ -281,7 +289,7 @@ async function handleBulkImport(io, socket, { roomId, files, folders }) {
       }
     }
 
-    const room = roomService.getRoom(roomId);
+    const room = await roomService.getRoom(roomId);
     if (!room) {
       socket.emit("import-error", { msg: "Room not found" });
       return;
@@ -317,6 +325,7 @@ async function handleBulkImport(io, socket, { roomId, files, folders }) {
       }
     }
 
+    await roomService.setRoom(roomId, room);
     await roomService.persistRoom(roomId);
 
     io.to(roomId).emit("bulk-imported", {
@@ -351,9 +360,9 @@ function handleWebrtcIceCandidate(io, socket, { to, candidate }) {
   io.to(to).emit("webrtc-ice-candidate", { from: socket.id, candidate });
 }
 
-function handleDisconnect(io, socket) {
+async function handleDisconnect(io, socket) {
   const { roomId } = socket;
-  const room = roomId && roomService.getRoom(roomId);
+  const room = roomId && (await roomService.getRoom(roomId));
   if (room) {
     room.users = room.users.filter((u) => u.id !== socket.id);
     io.to(roomId).emit("users-update", room.users);

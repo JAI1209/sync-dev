@@ -97,7 +97,7 @@ router.post("/:roomId/restore", authJwt, requirePermission("RESTORE_SNAPSHOT"), 
     );
     
     // Bug C: Update live in-memory room state
-    const room = roomService.getRoom(roomId);
+    const room = await roomService.getRoom(roomId);
     if (room) {
       room.files = Object.fromEntries(snapshot.files);
       room.folders = Object.fromEntries(snapshot.folders);
