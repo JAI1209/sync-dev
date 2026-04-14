@@ -150,6 +150,7 @@ async function handleCreateFile(io, socket, { roomId, file }) {
 
   room.files[file.id] = file;
   await roomService.setRoom(roomId, room);
+  socket.emit("file-created-ack", { fileId: file.id });
   socket.to(roomId).emit("file-created", file);
   roomService.persistRoom(roomId);
 }

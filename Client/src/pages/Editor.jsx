@@ -25,6 +25,7 @@ export default function Editor({ username }) {
     createFile, createFolder,
     renameFile, renameFolder,
     deleteFile, deleteFolder,
+    setActiveFile,
   } = fs;
 
   // ── local UI state ─────────────────────────────────────────────────────────
@@ -62,7 +63,20 @@ export default function Editor({ username }) {
   const handleCreateFile = useCallback((name, parentId) => {
     const file = createFile(name, parentId);
     socketRef.current?.emit("create-file", { roomId, file });
-  }, [createFile, roomId, socketRef]);
+
+    const onAck = ({ fileId }) => {
+      if (fileId === file.id) {
+        clearTimeout(timeout);
+        setActiveFile(file.id);
+      }
+    };
+
+    const timeout = setTimeout(() => {
+      socketRef.current?.off("file-created-ack", onAck);
+    }, 5000);
+
+    socketRef.current?.once("file-created-ack", onAck);
+  }, [createFile, roomId, socketRef, setActiveFile]);
 
   const handleCreateFolder = useCallback((name, parentId) => {
     const folder = createFolder(name, parentId);

@@ -22,7 +22,7 @@ async function checkRateLimit(userId) {
     allowed: true,
     remaining: MAX_AI_REQUESTS_PER_HOUR - count,
     resetIn: ttl,
-  };
+  };ū
 }
 
 function buildPrompt(code, language, userPrompt) {

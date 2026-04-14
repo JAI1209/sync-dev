@@ -79,8 +79,6 @@ export function useFileSystem() {
     const id   = uid();
     const file = { id, name, content: "", language: extToLanguage(name), parentId };
     setFiles((prev) => ({ ...prev, [id]: file }));
-    setActiveFileId(id);
-    setOpenTabs((prev) => [...prev, id]);
     return file;
   }, []);
 
@@ -195,7 +193,7 @@ export function useFileSystem() {
     files, folders, activeFileId, openTabs,
     // actions (caller emits socket for mutations)
     loadRoomState, loadFiles,
-    openFile, closeTab,
+    openFile, setActiveFile: openFile, closeTab,
     updateFileContent,
     createFile, createFolder,
     renameFile, renameFolder,
