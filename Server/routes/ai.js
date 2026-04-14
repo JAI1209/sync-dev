@@ -6,29 +6,25 @@
 const router = require("express").Router();
 const { authJwt } = require("../middleware/authJwt");
 const { MAX_AI_REQUESTS_PER_HOUR } = require("../config/constants");
+const { redis } = require("../config/redis");
 
 const AI_API_KEY = process.env.OPENAI_API_KEY || process.env.CLAUDE_API_KEY || "";
 const AI_PROVIDER = process.env.AI_PROVIDER || "openai"; // 'openai' or 'claude'
 const AI_MODEL = process.env.AI_MODEL || "gpt-4o-mini";
 
-// Simple in-memory rate limiting (use Redis in production)
-const rateLimitMap = new Map();
-
-function checkRateLimit(userId) {
-  const now = Date.now();
-  const windowStart = now - 3600000; // 1 hour ago
-  
-  let requests = rateLimitMap.get(userId) || [];
-  requests = requests.filter(t => t > windowStart);
-  
-  if (requests.length >= MAX_AI_REQUESTS_PER_HOUR) {
-    return { allowed: false, remaining: 0, resetIn: Math.ceil((requests[0] + 3600000 - now) / 1000) };
+async function checkRateLimit(userId) {
+  const key = `ratelimit:ai:${userId}`;
+  const count = await redis.incr(key);
+  if (count === 1) {
+    await redis.expire(key, 3600);
   }
 
-  requests.push(now);
-  rateLimitMap.set(userId, requests);
+  if (count > MAX_AI_REQUESTS_PER_HOUR) {
+    const ttl = await redis.ttl(key);
+    return { allowed: false, remaining: 0, resetIn: ttl };
+  }
 
-  return { allowed: true, remaining: MAX_AI_REQUESTS_PER_HOUR - requests.length };
+  return { allowed: true, remaining: MAX_AI_REQUESTS_PER_HOUR - count, resetIn: await redis.ttl(key) };
 }
 
 // POST /api/ai/ask — Get AI code suggestions
@@ -41,7 +37,7 @@ router.post("/ask", authJwt, async (req, res) => {
   }
   
   // Rate limiting
-  const rateLimit = checkRateLimit(userId);
+  const rateLimit = await checkRateLimit(userId);
   if (!rateLimit.allowed) {
     return res.status(429).json({ 
       msg: `Rate limit exceeded. Try again in ${rateLimit.resetIn} seconds.`,
@@ -125,7 +121,7 @@ router.post("/explain", authJwt, async (req, res) => {
     return res.status(503).json({ msg: "AI assistant is not configured" });
   }
   
-  const rateLimit = checkRateLimit(userId);
+  const rateLimit = await checkRateLimit(userId);
   if (!rateLimit.allowed) {
     return res.status(429).json({ 
       msg: `Rate limit exceeded. Try again in ${rateLimit.resetIn} seconds.` 

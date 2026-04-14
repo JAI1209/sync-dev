@@ -21,9 +21,19 @@ const roomService = require("./services/roomService");
 const app = express();
 const server = http.createServer(app);
 
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || "http://localhost:5173")
+  .split(",")
+  .map((o) => o.trim());
+
 app.use(cors({
-  origin: function(origin, callback) { callback(null, true); },
-  credentials: true
+  origin: function(origin, callback) {
+    if (!origin || CORS_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origin ${origin} not allowed`));
+    }
+  },
+  credentials: true,
 }));
 app.use(morganMiddleware);
 app.use(securityHeaders);

@@ -6,7 +6,16 @@ const { registerRoomHandlers } = require("./roomHandler");
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
     cors: {
-      origin: true,
+      origin: function(origin, callback) {
+        const allowed = (process.env.CORS_ORIGINS || "http://localhost:5173")
+          .split(",")
+          .map((o) => o.trim());
+        if (!origin || allowed.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error(`CORS: origin ${origin} not allowed`));
+        }
+      },
       methods: ["GET", "POST"],
       credentials: true,
     },
