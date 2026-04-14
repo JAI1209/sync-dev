@@ -2295,3 +2295,201 @@ button {
 .run-terminal__line--error {
   color: #f85149;
 }
+
+.button--success { background: #EAF3DE; color: #3B6D11; }
+
+/* ── MemberManager ────────────────────────────────────────────────────── */
+.sidebar-members { }
+
+.sidebar-members--open { }
+
+.sidebar-members__invite {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.sidebar-members__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+
+.sidebar-members__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.sidebar-members__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-members__online {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.sidebar-members__role {
+  font-size: 10px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: var(--surface-strong);
+  color: var(--muted);
+}
+
+.sidebar-members__role--owner { color: #f59e0b; }
+.sidebar-members__role--admin { color: var(--primary); }
+.sidebar-members__role--editor { color: var(--accent); }
+
+.sidebar-members__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-members__role-select {
+  font-size: 11px;
+  padding: 2px 4px;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+}
+
+.sidebar-members__remove {
+  padding: 2px 6px;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--danger);
+  border-radius: 3px;
+  color: var(--danger);
+  cursor: pointer;
+}
+
+.sidebar-members__remove:hover { background: var(--danger); color: #fff; }
+
+.sidebar-members__empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px;
+}
+
+/* ── AIAssistant ──────────────────────────────────────────────────────── */
+.ai-assistant {
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.ai-assistant h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ai-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-controls textarea {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px;
+  color: var(--text);
+  font-size: 11px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.ai-btn {
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  border: none;
+}
+
+.ai-btn.ask {
+  background: var(--primary);
+  color: #fff;
+}
+
+.ai-btn.ask:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ai-btn.apply {
+  background: var(--accent);
+  color: #000;
+}
+
+.ai-btn.reject {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.ai-rate-limit {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.ai-error {
+  margin-top: 6px;
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.ai-suggestion {
+  margin-top: 8px;
+}
+
+.ai-suggestion h4 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ai-suggestion pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px;
+  font-size: 11px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.ai-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}

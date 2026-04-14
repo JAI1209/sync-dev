@@ -1,20 +1,11 @@
 import { useState, useCallback } from "react";
+import { extToLanguage } from "../utils/extToLanguage";
+
+export { extToLanguage };
 
 // ── Helpers (exported so FileTree / TabBar can use them too) ──────────────────
 export function uid() {
   return "f_" + Math.random().toString(36).slice(2, 10);
-}
-
-export const EXT_LANG = {
-  js: "javascript", jsx: "javascript", ts: "typescript", tsx: "typescript",
-  py: "python", java: "java", cpp: "cpp", c: "cpp", cs: "csharp",
-  html: "html", css: "css", json: "json", md: "markdown", sh: "shell",
-  go: "go", rs: "rust", php: "php", rb: "ruby", yml: "yaml", yaml: "yaml",
-};
-
-export function extToLanguage(name) {
-  const ext = (name || "").split(".").pop().toLowerCase();
-  return EXT_LANG[ext] || "plaintext";
 }
 
 export const FILE_ICONS = {

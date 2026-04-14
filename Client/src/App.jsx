@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { Routes, Route, Navigate, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
-import { jwtDecode } from 'jwt-decode'
 import { AppHeader, AuthScreen, DashboardScreen } from './components/screens'
 import Editor from './pages/Editor'
 import GitHubAuthCallback from './pages/GitHubAuthCallback'
@@ -8,6 +7,10 @@ import logoSrc from './assets/SD.png'
 import { loginUser, googleLogin, registerUser } from './api/auth'
 import { apiUrl } from './api/client'
 import { importGitHubRepo } from './api/github'
+import { generateRoomId } from './utils/ids'
+import { useAuth } from './context/AuthContext'
+
+
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 const SESSIONS_KEY = 'syncdev_recent_sessions'
@@ -33,7 +36,7 @@ function addSession(sessions, id) {
 }
 
 export default function App() {
-  const [token, setToken] = useState(localStorage.getItem('token'))
+  const { token, setToken, username, handleLogout } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
@@ -87,22 +90,6 @@ export default function App() {
     })
   }, [githubErrorQ, location.pathname, token])
 
-  // ── helpers ────────────────────────────────────────────────────────────────
-  const getUsername = () => {
-    try { return jwtDecode(token).user?.username || 'engineer' }
-    catch { return 'engineer' }
-  }
-
-  const saveToken = (t) => {
-    localStorage.setItem('token', t)
-    setToken(t)
-  }
-
-  const handleLogout = () => {
-    localStorage.removeItem('token')
-    setToken(null)
-    navigate('/login')
-  }
 
   // ── auth handlers ──────────────────────────────────────────────────────────
   const handleLoginChange = (field, value) =>
@@ -115,7 +102,8 @@ export default function App() {
     const data = await loginUser(loginForm.username, loginForm.password)
     setAuthBusy(null)
     if (data.token) {
-      saveToken(data.token)
+      setToken(data.token)
+if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken)
       navigate('/dashboard')
     } else {
       setAuthBanner({ tone: 'danger', title: 'Auth failed', detail: data.msg || 'Invalid credentials' })
@@ -126,7 +114,8 @@ export default function App() {
     setAuthBanner(null)
     const data = await googleLogin(credentialResponse.credential)
     if (data.token) {
-      saveToken(data.token)
+      setToken(data.token)
+if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken)
       navigate('/dashboard')
     } else {
       setAuthBanner({ tone: 'danger', title: 'Google login failed', detail: 'Try again or use username/password' })
@@ -186,7 +175,7 @@ export default function App() {
   // ── dashboard handlers ─────────────────────────────────────────────────────
   const handleInitializeSession = () => {
     setDashboardBusy('create')
-    const id = Math.random().toString(36).substring(2, 8).toUpperCase()
+    const id = generateRoomId()
     setTimeout(() => {
       setDashboardBusy(null)
       setRecentSessions(prev => addSession(prev, id))
@@ -252,7 +241,7 @@ export default function App() {
         })
         return
       }
-      const id = Math.random().toString(36).substring(2, 8).toUpperCase()
+      const id = generateRoomId()
       sessionStorage.setItem(
         'syncdev_pending_import',
         JSON.stringify({
@@ -354,7 +343,7 @@ export default function App() {
                   onNavigate={handleAuthNavigate}
                 />
                 <DashboardScreen
-                  activeUser={getUsername()}
+                  activeUser={username}
                   dashboardBanner={dashboardBanner}
                   dashboardBusy={dashboardBusy}
                   joinRoomId={joinRoomId}
@@ -382,7 +371,7 @@ export default function App() {
         {/* ── EDITOR (unchanged — your working socket logic) ── */}
         <Route
           path="/editor/:roomId"
-          element={token ? <Editor username={getUsername()} /> : <Navigate to="/login" />}
+          element={token ? <Editor username={username} /> : <Navigate to="/login" />}
         />
 
         <Route path="*" element={<Navigate to={token ? '/dashboard' : '/login'} />} />

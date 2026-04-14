@@ -14,7 +14,12 @@ const UserSchema = new mongoose.Schema({
     },
     password: {
         type: String,
-        required: true,
+        required: false,   // OAuth users (Google/GitHub) have no password
+    },
+    authProvider: {
+        type: String,
+        enum: ['local', 'google', 'github'],
+        default: 'local',  // Normal username/password registrations are 'local'
     },
     githubId: {
         type: String,
@@ -25,6 +30,8 @@ const UserSchema = new mongoose.Schema({
     githubAccessToken: { type: String, select: false },
     githubRefreshToken: { type: String, select: false },
     githubTokenExpiry: { type: Date },
+    resetToken: { type: String },
+    resetTokenExpiry: { type: Date },
 });
 
 module.exports = mongoose.model('User', UserSchema);

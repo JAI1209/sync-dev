@@ -17,17 +17,7 @@ const SKIP_EXTS = new Set([
   'ttf','woff','woff2','eot',
 ]);
 
-const EXT_LANG = {
-  js:'javascript', jsx:'javascript', ts:'typescript', tsx:'typescript',
-  py:'python', java:'java', cpp:'cpp', c:'cpp', cs:'csharp',
-  html:'html', css:'css', json:'json', md:'markdown', sh:'shell',
-  go:'go', rs:'rust', php:'php', rb:'ruby', yml:'yaml', yaml:'yaml',
-};
-
-function extToLanguage(name) {
-  const ext = name.split('.').pop().toLowerCase();
-  return EXT_LANG[ext] || 'plaintext';
-}
+import { extToLanguage } from "./extToLanguage";
 
 function uid() {
   return 'f_' + Math.random().toString(36).slice(2, 10);

@@ -1,6 +1,7 @@
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { generateRoomId } from '../utils/ids';
 
 
 
@@ -9,17 +10,24 @@ export default function Dashboard({ onLogout ,username }) {
   const [error, setError] = useState('');
   const navigate = useNavigate();
 
-  const createRoom = () =>{
-    const id =Math.random().toString(36).substring(2, 8);
+  const createRoom = () => {
+    const id = generateRoomId();
     navigate(`/editor/${id}`);
   }
 
   const joinRoom = () => {
-    if(!roomId.trim()){
+    const trimmed = roomId.trim().toUpperCase();
+    if(!trimmed){
       setError('Enter a room code');
       return;
     }
-    navigate(`/editor/${roomId.trim()}`);
+    // Bug 20: Validate room ID format (8 chars from ROOM_ALPHABET)
+    const ROOM_ID_REGEX = /^[A-HJ-NP-Z2-9]{8}$/;
+    if (!ROOM_ID_REGEX.test(trimmed)) {
+      setError('Invalid room code format. Expected 8 characters (A-Z, 2-9, excluding I, O, 0, 1)');
+      return;
+    }
+    navigate(`/editor/${trimmed}`);
   };
 
   return (

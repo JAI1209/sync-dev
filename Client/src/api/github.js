@@ -1,13 +1,9 @@
-import { apiUrl } from "./client";
+import { authFetch } from "./client";
 
 export async function importGitHubRepo(owner, repo, ref) {
-  const token = localStorage.getItem("token");
-  const res = await fetch(apiUrl("/api/github/import"), {
+  const res = await authFetch("/api/github/import", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ owner, repo, ref: ref || undefined }),
   });
   const data = await res.json().catch(() => ({}));
@@ -26,13 +22,9 @@ export async function importGitHubRepo(owner, repo, ref) {
  * @param {{ path: string, content: string }[]} files
  */
 export async function commitGitHubRepo(owner, repo, branch, message, files) {
-  const token = localStorage.getItem("token");
-  const res = await fetch(apiUrl("/api/github/commit"), {
+  const res = await authFetch("/api/github/commit", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ owner, repo, branch, message, files }),
   });
   const data = await res.json().catch(() => ({}));

@@ -1,6 +1,10 @@
 const express = require("express");
 const vm = require("vm");
 const { authJwt } = require("../middleware/authJwt");
+const {
+  MAX_CODE_BYTES,
+  EXECUTE_MAX_TIMEOUT_MS,
+} = require("../config/constants");
 
 const router = express.Router();
 
@@ -10,9 +14,6 @@ try {
 } catch {
   /* optional */
 }
-
-const MAX_CODE_BYTES = 500 * 1024;
-const DEFAULT_TIMEOUT_MS = 8000;
 
 function buildSandbox() {
   const logs = [];
@@ -121,10 +122,7 @@ router.post("/run", authJwt, (req, res) => {
       Fragment: Symbol.for("react.fragment"),
     };
   }
-  const timeout = Math.min(
-    Number(process.env.EXECUTE_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS,
-    30000
-  );
+  const timeout = Math.min(EXECUTE_MAX_TIMEOUT_MS, 30000);
 
   const wrapped = `"use strict";\n(function(){\n${js}\n})();`;
 

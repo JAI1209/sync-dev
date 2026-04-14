@@ -1,8 +1,6 @@
 // Fetch repo tree via GitHub API and build the same file map shape as client upload.
 
-const MAX_FILE_SIZE =
-  Number(process.env.GITHUB_IMPORT_MAX_FILE_BYTES) || 2 * 1024 * 1024; // 2 MB default
-const MAX_FILE_COUNT = Number(process.env.GITHUB_IMPORT_MAX_FILES) || 5000;
+const { GITHUB_MAX_FILE_BYTES, GITHUB_MAX_FILE_COUNT } = require('../config/constants');
 
 const SKIP_DIRS = new Set([
   "node_modules", ".git", ".next", ".nuxt", "dist", "build",
@@ -20,23 +18,10 @@ const SKIP_EXTS = new Set([
   "ttf", "woff", "woff2", "eot",
 ]);
 
-const EXT_LANG = {
-  js: "javascript", jsx: "javascript", ts: "typescript", tsx: "typescript",
-  py: "python", java: "java", cpp: "cpp", c: "cpp", cs: "csharp",
-  html: "html", css: "css", json: "json", md: "markdown", sh: "shell",
-  go: "go", rs: "rust", php: "php", rb: "ruby", yml: "yaml", yaml: "yaml",
-  svg: "xml",
-  xml: "xml",
-  toml: "plaintext", lock: "plaintext",
-};
+const { extToLanguage } = require('../utils/extToLanguage');
 
 function uid() {
   return "f_" + Math.random().toString(36).slice(2, 10);
-}
-
-function extToLanguage(name) {
-  const ext = (name || "").split(".").pop().toLowerCase();
-  return EXT_LANG[ext] || "plaintext";
 }
 
 async function ghFetchJson(url, token) {
@@ -125,9 +110,9 @@ async function importRepoFromGitHub({ owner, repo, ref, token }) {
   const orderedFileIds = [];
 
   for (const entry of blobs) {
-    if (orderedFileIds.length >= MAX_FILE_COUNT) {
+    if (orderedFileIds.length >= GITHUB_MAX_FILE_COUNT) {
       skipped.push(
-        `Import limit reached (${MAX_FILE_COUNT} files); additional matching files in the repo were not imported.`
+        `Import limit reached (${GITHUB_MAX_FILE_COUNT} files); additional matching files in the repo were not imported.`
       );
       break;
     }
@@ -139,7 +124,7 @@ async function importRepoFromGitHub({ owner, repo, ref, token }) {
       continue;
     }
 
-    if (entry.size != null && entry.size > MAX_FILE_SIZE) {
+    if (entry.size != null && entry.size > GITHUB_MAX_FILE_BYTES) {
       skipped.push(`${relPath.split("/").pop()} (too large: ${Math.round(entry.size / 1024)}KB)`);
       continue;
     }
