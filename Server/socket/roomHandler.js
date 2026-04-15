@@ -261,7 +261,7 @@ async function handleDeleteFolder(io, socket, { roomId, folderId }) {
   }
   await roomService.setRoom(roomId, room);
 
-  socket.to(roomId).emit("folder-deleted", {
+  io.in(roomId).emit("folder-deleted", {
     folderId,
     deletedFiles,
     deletedFolders,

@@ -1,5 +1,12 @@
+const Sentry = require("@sentry/node");
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  enabled: !!process.env.SENTRY_DSN,
+  environment: process.env.NODE_ENV || "development",
+  tracesSampleRate: 0.1,
+});
 const express = require("express");
 const http = require("http");
 const mongoose = require("mongoose");
@@ -56,6 +63,8 @@ app.use("/api/auth/github", githubOAuthRoutes);
 app.use("/api/github", githubImportRoutes);
 app.use("/api/execute", executeRoutes);
 
+Sentry.setupExpressErrorHandler(app);
+
 // ── Room state ─────────────────────────────────────────────────────────────────
 // Room lifecycle and socket event handling are now managed in Server/socket.
 // The module initializes Socket.IO, authenticates sockets, and registers room events.
@@ -79,7 +88,7 @@ server.on("error", (err) => {
 async function startServer() {
   try {
     await connectDB();
-    const io = initSocket(server);
+    const io = await initSocket(server);
     app.set("io", io);
     server.listen(LISTEN_PORT, () => logger.info("Server running", { port: LISTEN_PORT }));
   } catch (err) {

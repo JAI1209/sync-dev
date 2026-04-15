@@ -103,7 +103,7 @@ async function refresh(req, res) {
   }
 
   try {
-    const decoded = jwt.verify(refreshToken, config.jwtSecret);
+    const decoded = jwt.verify(refreshToken, config.refreshTokenSecret);
     if (decoded.type !== "refresh") {
       return res.status(401).json({ msg: "Invalid token type" });
     }
@@ -142,10 +142,10 @@ async function forgotPassword(req, res) {
 }
 
 async function resetPassword(req, res) {
-  const { token, email, password } = req.body;
+  const { token, password } = req.body;
 
-  if (!token || !email || !password) {
-    return res.status(400).json({ msg: "Token, email, and new password are required" });
+  if (!token || !password) {
+    return res.status(400).json({ msg: "Token and new password are required" });
   }
   if (password.length < 6) {
     return res.status(400).json({ msg: "Password must be at least 6 characters" });
@@ -153,16 +153,8 @@ async function resetPassword(req, res) {
 
   try {
     const resetTokenHash = crypto.createHash("sha256").update(token).digest("hex");
-    const user = await userService.findByEmail(email);
-
-    if (
-      !user ||
-      user.resetToken !== resetTokenHash ||
-      !user.resetTokenExpiry ||
-      user.resetTokenExpiry <= Date.now()
-    ) {
-      return res.status(400).json({ msg: "Invalid or expired reset token" });
-    }
+    const user = await userService.findByResetToken(resetTokenHash);
+    if (!user) return res.status(400).json({ msg: "Invalid or expired reset token" });
 
     const hashedPassword = await authService.hashPassword(password);
     await userService.resetPassword(user, hashedPassword);

@@ -1,9 +1,11 @@
 const { Server } = require("socket.io");
+const { createAdapter } = require("@socket.io/redis-adapter");
+const { redis } = require("../config/redis");
 const jwt = require("jsonwebtoken");
 const config = require("../config");
 const { registerRoomHandlers } = require("./roomHandler");
 
-function initSocket(httpServer) {
+async function initSocket(httpServer) {
   const io = new Server(httpServer, {
     cors: {
       origin: function(origin, callback) {
@@ -42,6 +44,16 @@ function initSocket(httpServer) {
       return next(new Error("Invalid or expired token"));
     }
   });
+
+  const pubClient = redis.duplicate({ lazyConnect: true });
+  const subClient = redis.duplicate({ lazyConnect: true });
+
+  pubClient.on("error", (err) => console.error("[Redis Adapter] pub error:", err.message));
+  subClient.on("error", (err) => console.error("[Redis Adapter] sub error:", err.message));
+
+  await Promise.all([pubClient.connect(), subClient.connect()]);
+  io.adapter(createAdapter(pubClient, subClient));
+  console.log("[Socket] Redis adapter attached");
 
   io.on("connection", (socket) => {
     registerRoomHandlers(io, socket);

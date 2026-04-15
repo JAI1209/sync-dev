@@ -1103,14 +1103,41 @@ button {
   color: var(--text);
 }
 
-/* Workspace Layout */
-.editor-workspace {
+/* Editor layout wrapper */
+.editor-wrapper {
   display: grid;
-  grid-template-columns: 240px 1fr minmax(260px, 300px);
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "editor-header editor-header"
+    "editor-workspace participants-panel"
+    "editor-toolbar editor-toolbar";
+  gap: 18px;
+  min-height: calc(100vh - 20px);
+  padding: 16px 20px 20px;
+}
+
+.editor-header {
+  grid-area: editor-header;
+}
+
+.editor-workspace {
+  grid-area: editor-workspace;
+  display: grid;
+  grid-template-columns: 240px 1fr;
   gap: 0;
-  flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+.participants-panel {
+  grid-area: participants-panel;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editor-toolbar {
+  grid-area: editor-toolbar;
 }
 
 /* Sidebar (file tree) */
@@ -1704,6 +1731,67 @@ button {
   box-shadow: 1px 1px 0 0 var(--black);
 }
 
+.video-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-top: 2px solid var(--border);
+  background: var(--surface-alt);
+  min-height: 0;
+}
+
+.video-item {
+  position: relative;
+  min-height: 120px;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #090b11;
+}
+
+.video-item video,
+.video-item .video-avatar-placeholder {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.video-label {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 4px 8px;
+  border-radius: 8px;
+  max-width: calc(100% - 16px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.participant-mute {
+  margin-top: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.participant-mute:hover {
+  border-color: var(--primary);
+  background: rgba(59, 130, 246, 0.12);
+}
+
 /* Bottom Toolbar */
 .editor-toolbar {
   display: flex;
@@ -1806,6 +1894,10 @@ button {
 
   .editor-header__right {
     justify-content: flex-end;
+  }
+
+  .editor-wrapper {
+    grid-template-columns: 1fr;
   }
 
   .editor-workspace {

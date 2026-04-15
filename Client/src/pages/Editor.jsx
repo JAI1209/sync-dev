@@ -6,18 +6,13 @@ import { useSocket } from "../hooks/useSocket";
 import { useMonacoModels } from "../hooks/useMonacoModels";
 import { useWebRTC } from "../hooks/useWebRTC";
 import { useGitHub } from "../hooks/useGitHub";
-import FileTree from "../components/FileTree";
-import MemberManager from "../components/MemberManager";
-import TabBar from "../components/TabBar";
 import { readUploadedFiles } from "../utils/readFiles";
-const RunTerminal = lazy(() => import("../components/RunTerminal.jsx"));
-
+import EditorHeader from "../components/EditorHeader.jsx";
+import EditorWorkspace from "../components/EditorWorkspace.jsx";
+import ParticipantsPanel from "../components/ParticipantsPanel.jsx";
+import VideoToolbar from "../components/VideoToolbar.jsx";
 export default function Editor({ username }) {
-  const { roomId }  = useParams();
-  const navigate    = useNavigate();
-  const monaco      = useMonaco();
-
-  // ── file system state ──────────────────────────────────────────────────────
+  const { roomId } = useParams(), navigate = useNavigate(), monaco = useMonaco();
   const fs = useFileSystem();
   const {
     files, folders, activeFileId, openTabs,
@@ -27,21 +22,10 @@ export default function Editor({ username }) {
     deleteFile, deleteFolder,
     setActiveFile,
   } = fs;
-
-  // ── local UI state ─────────────────────────────────────────────────────────
-  const [editorKey, setEditorKey] = useState(0);
-  const [copied, setCopied] = useState(false);
-  const [showAll, setShowAll] = useState(false);
-  const [hoveredUser, setHoveredUser] = useState(null);
+  const [editorKey, setEditorKey] = useState(0), [copied, setCopied] = useState(false), [showAll, setShowAll] = useState(false), [hoveredUser, setHoveredUser] = useState(null), [uploadStatus, setUploadStatus] = useState(null), [terminalOpen, setTerminalOpen] = useState(false), [showVideo, setShowVideo] = useState(false), [editorNotification, setEditorNotification] = useState(null), [filesLoaded, setFilesLoaded] = useState(false);
   const sidebarOpen = true;
-  const [uploadStatus, setUploadStatus] = useState(null);
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  const [showVideo, setShowVideo] = useState(false);
-  const [editorNotification, setEditorNotification] = useState(null);
-  const [filesLoaded, setFilesLoaded] = useState(false);
   const uploadInputRef = useRef(null);
 
-  // ── Socket (real-time collaboration) ─────────────────────────────────────────
   const {
     socketRef,
     joined,
@@ -59,7 +43,6 @@ export default function Editor({ username }) {
     monaco,
     setEditorKey,
   });
-
   const handleCreateFile = useCallback((name, parentId) => {
     const file = createFile(name, parentId);
     socketRef.current?.emit("create-file", { roomId, file });
@@ -77,12 +60,10 @@ export default function Editor({ username }) {
 
     socketRef.current?.once("file-created-ack", onAck);
   }, [createFile, roomId, socketRef, setActiveFile]);
-
   const handleCreateFolder = useCallback((name, parentId) => {
     const folder = createFolder(name, parentId);
     socketRef.current?.emit("create-folder", { roomId, folder });
   }, [createFolder, roomId, socketRef]);
-
   const handleRenameFile = useCallback((fileId, name) => {
     renameFile(fileId, name);
     socketRef.current?.emit("rename-file", { roomId, fileId, name });
@@ -105,7 +86,6 @@ export default function Editor({ username }) {
 
   const usersRef = useRef([]);
 
-  // ── Track when files are loaded ─────────────────────────────────────────────
   useEffect(() => {
     if (joined && Object.keys(files).length > 0) {
       setFilesLoaded(true);
@@ -116,7 +96,6 @@ export default function Editor({ username }) {
     usersRef.current = users;
   }, [users]);
 
-  // ── Handle Monaco clipboard error ──────────────────────────────────────────
   useEffect(() => {
     const handler = (msg, source, line, col, error) => {
       if (msg && msg.includes("clipboard")) {
@@ -130,7 +109,6 @@ export default function Editor({ username }) {
     return () => window.removeEventListener("error", handler);
   }, []);
 
-  // ── Monaco models ──────────────────────────────────────────────────────────
   const {
     handleEditorMount,
   } = useMonacoModels({
@@ -143,7 +121,6 @@ export default function Editor({ username }) {
     roomId,
   });
 
-  // ── WebRTC (voice/video) ───────────────────────────────────────────────────
   const webrtc = useWebRTC({ socketRef, joined, usersRef });
   const {
     micOn, camOn, remoteStreams, localVideoRef, remoteVideoRefs,
@@ -151,7 +128,6 @@ export default function Editor({ username }) {
     mutedPeers, setMutedPeers,
   } = webrtc;
 
-  // ── GitHub integration ──────────────────────────────────────────────────────
   const github = useGitHub({
     files,
     folders,
@@ -169,11 +145,9 @@ export default function Editor({ username }) {
     handleImportGithub,
   } = github;
 
-  // ── Derived values ─────────────────────────────────────────────────────────
   const activeFile = activeFileId ? files[activeFileId] : null;
   const visibleUsers = showAll ? users : users.slice(0, 5);
 
-  // ── Monaco options (readOnly based on role) ──────────────────────────────────
   const monacoOptions = useMemo(() => ({
     fontSize: 14,
     minimap: { enabled: false },
@@ -186,7 +160,6 @@ export default function Editor({ username }) {
     readOnly: userRole === "viewer",
   }), [userRole]);
 
-  // ── Handlers ─────────────────────────────────────────────────────────────────
   const handleUpload = useCallback(async () => {
     if (!uploadInputRef.current?.files?.length) return;
     setUploadStatus("loading");
@@ -198,10 +171,10 @@ export default function Editor({ username }) {
       console.log('[Upload] Processed - files:', Object.keys(newFiles).length, 'folders:', Object.keys(newFolders).length);
       console.log('[Upload] Folder names:', Object.values(newFolders).map(f => f.name));
       loadFiles(newFiles, newFolders, Object.keys(newFiles)[0] || null);
-      
+
       const sock = socketRef.current;
       const pendingData = { roomId, files: newFiles, folders: newFolders };
-      
+
       if (sock?.connected) {
         sessionStorage.removeItem("syncdev_pending_upload");
         sock.emit("bulk-import", pendingData);
@@ -217,28 +190,6 @@ export default function Editor({ username }) {
     }
   }, [loadFiles, roomId, socketRef]);
 
-  const retryPendingUpload = useCallback(() => {
-    try {
-      const raw = sessionStorage.getItem("syncdev_pending_upload");
-      if (!raw) return;
-      const pending = JSON.parse(raw);
-      if (pending.roomId !== roomId) return;
-      
-      sessionStorage.removeItem("syncdev_pending_upload");
-      const sock = socketRef.current;
-      
-      if (sock?.connected) {
-        console.log("[Upload] Retrying pending upload...");
-        sock.emit("bulk-import", pending);
-      } else {
-        sessionStorage.setItem("syncdev_pending_upload", JSON.stringify(pending));
-      }
-    } catch (e) {
-      console.error("[Upload] Retry failed:", e);
-      sessionStorage.removeItem("syncdev_pending_upload");
-    }
-  }, [roomId, socketRef]);
-
   const handleCopyRoom = () => {
     navigator.clipboard.writeText(roomId);
     setCopied(true);
@@ -252,278 +203,88 @@ export default function Editor({ username }) {
     return "// Select a JS/TS file to run";
   }, [activeFile]);
 
-  // ── JSX ───────────────────────────────────────────────────────────────────────
   return (
     <div className="editor-wrapper">
-      {/* ── header ── */}
-      <header className="editor-header">
-        <div className="editor-header__left">
-          <div className="editor-brand">
-            <span className="logo">SyncDev</span>
-            <span className="room-badge" onClick={handleCopyRoom}>
-              {roomId} {copied && "✓"}
-            </span>
-          </div>
-        </div>
+      <EditorHeader
+        roomId={roomId}
+        copied={copied}
+        handleCopyRoom={handleCopyRoom}
+        userRole={userRole}
+        githubBusy={githubBusy}
+        githubMeta={githubMeta}
+        commitBranch={commitBranch}
+        setCommitBranch={setCommitBranch}
+        commitMessage={commitMessage}
+        setCommitMessage={setCommitMessage}
+        handleCommitPush={handleCommitPush}
+        handleDownloadZip={handleDownloadZip}
+        handleImportGithub={handleImportGithub}
+        terminalOpen={terminalOpen}
+        setTerminalOpen={setTerminalOpen}
+        socketStatus={socketStatus}
+        reconnecting={reconnecting}
+        handleReconnectSocket={handleReconnectSocket}
+        socketIssue={socketIssue}
+        githubHint={githubHint}
+      />
 
-        <div className="editor-header__right editor-actions">
-          {userRole !== "viewer" && (
-            <>
-              <button
-                className="btn"
-                onClick={() => {
-                  const url = prompt("GitHub repo URL (e.g., https://github.com/owner/repo)");
-                  if (url) handleImportGithub(url);
-                }}
-                disabled={githubBusy}
-              >
-                {githubBusy ? "⏳" : "📥 Import"}
-              </button>
+      <EditorWorkspace
+        sidebarOpen={sidebarOpen}
+        files={files}
+        folders={folders}
+        activeFileId={activeFileId}
+        openTabs={openTabs}
+        openFile={openFile}
+        closeTab={closeTab}
+        handleCreateFile={handleCreateFile}
+        handleCreateFolder={handleCreateFolder}
+        handleRenameFile={handleRenameFile}
+        handleRenameFolder={handleRenameFolder}
+        handleDeleteFile={handleDeleteFile}
+        handleDeleteFolder={handleDeleteFolder}
+        userRole={userRole}
+        uploadInputRef={uploadInputRef}
+        uploadStatus={uploadStatus}
+        handleUpload={handleUpload}
+        roomId={roomId}
+        joined={joined}
+        filesLoaded={filesLoaded}
+        editorKey={editorKey}
+        handleEditorMount={handleEditorMount}
+        monacoOptions={monacoOptions}
+        terminalOpen={terminalOpen}
+        getRunCode={getRunCode}
+        activeFile={activeFile}
+        editorNotification={editorNotification}
+        remoteStreams={remoteStreams}
+      />
 
-              {githubMeta && (
-                <>
-                  <input
-                    className="input-small"
-                    placeholder="Branch"
-                    value={commitBranch}
-                    onChange={(e) => setCommitBranch(e.target.value)}
-                  />
-                  <input
-                    className="input-small"
-                    placeholder="Commit message"
-                    value={commitMessage}
-                    onChange={(e) => setCommitMessage(e.target.value)}
-                  />
-                  <button
-                    className="btn"
-                    onClick={handleCommitPush}
-                    disabled={githubBusy}
-                  >
-                    {githubBusy ? "⏳" : "⬆ Push"}
-                  </button>
-                </>
-              )}
-
-              <button className="btn" onClick={handleDownloadZip}>⬇ Export ZIP</button>
-            </>
-          )}
-          <button
-            className="btn"
-            onClick={() => setTerminalOpen((v) => !v)}
-          >
-            {terminalOpen ? "✕ Terminal" : "▶ Terminal"}
-          </button>
-          {socketStatus !== "connected" && (
-            <button
-              className="btn btn--primary"
-              onClick={handleReconnectSocket}
-              disabled={reconnecting}
-            >
-              {reconnecting ? "⏳ Connecting…" : "↻ Reconnect"}
-            </button>
-          )}
-          {socketIssue && <span className="error-badge">{socketIssue}</span>}
-          {githubHint && <span className="hint-badge">{githubHint}</span>}
-        </div>
-      </header>
-
-      {/* ── workspace ── */}
-      <div className="editor-workspace">
-        {/* sidebar */}
-        {sidebarOpen && (
-          <aside className="editor-sidebar">
-            <FileTree
-              files={files}
-              folders={folders}
-              activeFileId={activeFileId}
-              onOpenFile={openFile}
-              onCreateFile={handleCreateFile}
-              onCreateFolder={handleCreateFolder}
-              onRenameFile={handleRenameFile}
-              onRenameFolder={handleRenameFolder}
-              onDeleteFile={handleDeleteFile}
-              onDeleteFolder={handleDeleteFolder}
-              userRole={userRole}
-            />
-            <div className="sidebar-upload">
-              <input
-                ref={uploadInputRef}
-                type="file"
-                webkitdirectory=""
-                directory=""
-                style={{ display: "none" }}
-                onChange={handleUpload}
-              />
-              <button
-                className="sidebar-upload-btn"
-                onClick={() => uploadInputRef.current?.click()}
-                disabled={uploadStatus === "loading" || userRole === "viewer"}
-              >
-                {uploadStatus === "loading" ? "⏳ Uploading…" : userRole === "viewer" ? "⬆ View Only" : "⬆ Upload Folder"}
-              </button>
-            </div>
-            <MemberManager roomId={roomId} userRole={userRole} />
-          </aside>
-        )}
-
-        {/* editor area */}
-        <div className="editor-main">
-          <TabBar
-            files={files}
-            openTabs={openTabs}
-            activeFileId={activeFileId}
-            onActivate={openFile}
-            onClose={closeTab}
-          />
-          <div className={`editor-main__split${terminalOpen ? " editor-main__split--with-terminal" : ""}`}>
-            <div className="editor-viewport">
-              {joined && filesLoaded && activeFileId ? (
-                <MonacoEditor
-                  key={editorKey}
-                  height="100%"
-                  theme="vs-dark"
-                  language={files[activeFileId]?.language ?? "plaintext"}
-                  onMount={handleEditorMount}
-                  options={monacoOptions}
-                />
-              ) : (
-                <div className="editor-empty">
-                  {!joined ? "Connecting…" : "Loading files…"}
-                </div>
-              )}
-              {editorNotification && (
-                <div className="editor-notification">
-                  {editorNotification}
-                </div>
-              )}
-            </div>
-            {terminalOpen && (
-              <div className="run-terminal-wrap">
-                <Suspense fallback={
-                  <div className="run-terminal run-terminal--lazy">
-                    <div className="run-terminal__toolbar">
-                      <span className="run-terminal__hint">Loading terminal…</span>
-                    </div>
-                    <div className="run-terminal__xterm-host run-terminal__xterm-host--placeholder" />
-                  </div>
-                }>
-                  <RunTerminal
-                    getCode={getRunCode}
-                    language={activeFile?.language}
-                    fileName={activeFile?.name}
-                    activeFileId={activeFileId}
-                    files={files}
-                    folders={folders}
-                    disabled={!joined}
-                  />
-                </Suspense>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* participants panel */}
-        <aside className="participants-panel">
-          <div className="participants-header">
-            <div>
-              <span className="participants-label">PARTICIPANTS</span>
-              <p className="participants-subtitle">Live room members</p>
-            </div>
-            <span className="participants-count">{users.length}</span>
-          </div>
-          <div className="participants-scroll">
-            {visibleUsers.map((u) => (
-              <div
-                key={u.id}
-                className={`participant-card ${mutedPeers.has(u.id) ? "muted" : ""}`}
-                onMouseEnter={() => setHoveredUser(u.id)}
-                onMouseLeave={() => setHoveredUser(null)}
-              >
-                <div className={`participant-avatar ${u.username === username ? "you" : ""}`}>
-                  {u.username[0]?.toUpperCase()}
-                </div>
-                <div className="participant-info">
-                  <p className="participant-name">{u.username}</p>
-                  <p className="participant-state">{u.username === username ? "you" : "team member"}</p>
-                </div>
-                <span className="participant-status active" />
-                {hoveredUser === u.id && u.username !== username && (
-                  <button
-                    className="participant-mute"
-                    onClick={() =>
-                      setMutedPeers((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(u.id)) next.delete(u.id);
-                        else next.add(u.id);
-                        return next;
-                      })
-                    }
-                  >
-                    {mutedPeers.has(u.id) ? "🔇 Unmute" : "🔊 Mute"}
-                  </button>
-                )}
-              </div>
-            ))}
-            {users.length > 5 && (
-              <button className="participants-toggle" onClick={() => setShowAll((s) => !s)}>
-                {showAll ? "Show less" : `Show all ${users.length}`}
-              </button>
-            )}
-          </div>
-
-          {/* video panel */}
-          {(camOn || Object.keys(remoteStreams).length > 0) && showVideo && (
-            <div className="video-panel">
-              {camOn && (
-                <div className="video-item">
-                  <video ref={localVideoRef} muted auto playsInline className="video-local" />
-                  <span className="video-label">You</span>
-                </div>
-              )}
-              {Object.entries(remoteStreams).map(([peerId, stream]) => (
-                <div key={peerId} className="video-item">
-                  <video
-                    ref={(el) => {
-                      remoteVideoRefs.current[peerId] = el;
-                      if (el) el.srcObject = stream;
-                    }}
-                    autoPlay
-                    playsInline
-                    className="video-remote"
-                  />
-                  <span className="video-label">Peer</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </aside>
-      </div>
-
-      {/* ── toolbar ── */}
-      <footer className="editor-toolbar">
-        <div className="toolbar-section">
-          <button className={`toolbar-button ${micOn ? "active" : "inactive"}`} onClick={toggleMic}>
-            {micOn ? "🎤 Mic On" : "🔇 Mic Off"}
-          </button>
-          <button className={`toolbar-button ${camOn ? "active" : "inactive"}`} onClick={toggleCam}>
-            {camOn ? "📹 Cam On" : "📷 Cam Off"}
-          </button>
-          {(camOn || Object.keys(remoteStreams).length > 0) && (
-            <button className="toolbar-button" onClick={() => setShowVideo((v) => !v)}>
-              🖥 {showVideo ? "Hide" : "Show"} Video
-            </button>
-          )}
-        </div>
-        <div className="toolbar-section toolbar-section--center">
-          <span className="toolbar-info">
-            {users.length} peer{users.length !== 1 ? "s" : ""} connected
-            {micOn && " · 🎤 Live"}{camOn && " · 📹 Live"}
-          </span>
-        </div>
-        <div className="toolbar-section toolbar-section--right">
-          <button className="toolbar-button danger" onClick={endCall}>⊗ End Call</button>
-        </div>
-      </footer>
+      <ParticipantsPanel
+        users={users}
+        username={username}
+        showAll={showAll}
+        setShowAll={setShowAll}
+        hoveredUser={hoveredUser}
+        setHoveredUser={setHoveredUser}
+        mutedPeers={mutedPeers}
+        setMutedPeers={setMutedPeers}
+        camOn={camOn}
+        remoteStreams={remoteStreams}
+        showVideo={showVideo}
+        localVideoRef={localVideoRef}
+        remoteVideoRefs={remoteVideoRefs}
+      />
+      <VideoToolbar
+        micOn={micOn}
+        camOn={camOn}
+        toggleMic={toggleMic}
+        toggleCam={toggleCam}
+        remoteStreams={remoteStreams}
+        showVideo={showVideo}
+        setShowVideo={setShowVideo}
+        users={users}
+        endCall={endCall}
+      />
     </div>
   );
 }

@@ -185,11 +185,16 @@ if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken)
 
   const handleJoinSession = (e) => {
     e.preventDefault()
-    if (!joinRoomId.trim()) {
+    const rawId = joinRoomId.trim()
+    if (!rawId) {
       setDashboardBanner({ tone: 'danger', title: 'No room ID', detail: 'Enter a room code to connect' })
       return
     }
-    const id = joinRoomId.trim()
+    const id = rawId.toUpperCase()
+    if (!/^[A-HJ-NP-Z2-9]{8}$/.test(id)) {
+      setDashboardBanner({ tone: 'danger', title: 'Invalid room ID', detail: 'Room codes must be 8 characters long and use the correct format.' })
+      return
+    }
     setDashboardBusy('join')
     setTimeout(() => {
       setDashboardBusy(null)

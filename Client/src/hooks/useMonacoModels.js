@@ -22,8 +22,7 @@ export function useMonacoModels({ files, joined, activeFileId, monaco, socketRef
     let model = monaco.editor.getModel(uri);
     
     if (model && !model.isDisposed()) {
-      // Model exists - update content from current files state
-      model.setValue(file.content || "");
+      // Model exists - do not overwrite existing content on every render.
       if (file.language) {
         monaco.editor.setModelLanguage(model, file.language);
       }

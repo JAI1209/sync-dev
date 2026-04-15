@@ -18,7 +18,7 @@ function generateAccessToken(payload) {
 }
 
 function generateRefreshToken(payload) {
-  return jwt.sign({ ...payload, type: 'refresh' }, config.jwtSecret, {
+  return jwt.sign({ ...payload, type: 'refresh' }, config.refreshTokenSecret, {
     expiresIn: REFRESH_TOKEN_EXPIRY,
   });
 }

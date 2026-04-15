@@ -45,6 +45,13 @@ async function resetPassword(user, hashedPassword) {
   return await user.save();
 }
 
+async function findByResetToken(tokenHash) {
+  return await User.findOne({
+    resetToken: tokenHash,
+    resetTokenExpiry: { $gt: new Date() },
+  });
+}
+
 module.exports = {
   findByUsername,
   findByEmail,
@@ -53,4 +60,5 @@ module.exports = {
   createOAuthUser,
   saveResetToken,
   resetPassword,
+  findByResetToken,
 };
