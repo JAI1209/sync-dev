@@ -43,10 +43,11 @@ export default function TabBar({ files, openTabs, activeFileId, onActivate, onCl
               className="tab__close"
               onClick={(e) => { e.stopPropagation(); onClose(id); }}
               title="Close tab"
-            >×</button>
+            >x</button>
           </div>
         );
       })}
     </div>
   );
 }
+

@@ -9,13 +9,43 @@ const {
   requirePermission,
   requireMinRole,
   getMembership,
-  assignRoomOwner,
   hasPermission,
   ROLE_HIERARCHY,
   PERMISSIONS,
 } = require("../middleware/rbac");
 const RoomMember = require("../models/RoomMember");
 const User = require("../models/User");
+
+function decodeUsernameParam(value) {
+  try {
+    return decodeURIComponent(String(value || "")).trim();
+  } catch {
+    return String(value || "").trim();
+  }
+}
+
+async function notifyRoleChange(io, roomId, userId, payload) {
+  if (!io || !userId) return;
+  const targetUserId = String(userId);
+  const sockets = await io.in(roomId).fetchSockets();
+  for (const targetSocket of sockets) {
+    if (String(targetSocket.userId) !== targetUserId) continue;
+    targetSocket.emit("role-changed", payload);
+    targetSocket.userRole = payload.newRole;
+  }
+}
+
+async function notifyRemovedMember(io, roomId, userId, payload) {
+  if (!io || !userId) return;
+  const targetUserId = String(userId);
+  const sockets = await io.in(roomId).fetchSockets();
+  for (const targetSocket of sockets) {
+    if (String(targetSocket.userId) !== targetUserId) continue;
+    targetSocket.emit("removed-from-room", payload);
+    targetSocket.leave(roomId);
+    targetSocket.roomId = null;
+  }
+}
 
 /**
  * GET /api/rbac/rooms/:roomId/members
@@ -25,15 +55,16 @@ router.get("/rooms/:roomId/members", authJwt, requirePermission("VIEW_ROOM"), as
   try {
     const members = await RoomMember.find({ roomId: req.params.roomId })
       .sort({ joinedAt: 1 })
-      .select("username role joinedAt lastActive");
+      .select("userId username role joinedAt lastActive");
 
     res.json({
       members: members.map((m) => ({
+        userId: String(m.userId),
         username: m.username,
         role: m.role,
         joinedAt: m.joinedAt,
         lastActive: m.lastActive,
-        isOnline: Date.now() - m.lastActive < 5 * 60 * 1000, // 5 min threshold
+        isOnline: Boolean(m.lastActive) && Date.now() - new Date(m.lastActive).getTime() < 5 * 60 * 1000,
       })),
     });
   } catch (err) {
@@ -104,11 +135,12 @@ router.post("/rooms/:roomId/invite", authJwt, requirePermission("INVITE_USERS"),
 
 /**
  * PUT /api/rbac/rooms/:roomId/members/:username/role
- * Change a member's role (owner only)
+ * Change a member's role (owner/admin with hierarchy restrictions)
  */
 router.put("/rooms/:roomId/members/:username/role", authJwt, requirePermission("MANAGE_ROLES"), async (req, res) => {
   try {
-    const { roomId, username } = req.params;
+    const { roomId } = req.params;
+    const username = decodeUsernameParam(req.params.username);
     const { role } = req.body;
 
     if (!ROLE_HIERARCHY[role]) {
@@ -127,32 +159,39 @@ router.put("/rooms/:roomId/members/:username/role", authJwt, requirePermission("
 
     // Cannot assign role equal or higher to self
     const changerLevel = ROLE_HIERARCHY[req.userRole];
+    const currentTargetLevel = ROLE_HIERARCHY[target.role];
+    // FIX: Admin role management must be limited to members below admin level.
+    if (currentTargetLevel >= changerLevel) {
+      return res.status(403).json({ msg: "Cannot change role for member with equal or higher role" });
+    }
+
     const targetLevel = ROLE_HIERARCHY[role];
     if (targetLevel >= changerLevel) {
       return res.status(403).json({ msg: "Cannot assign role equal or higher to your own" });
     }
 
     const oldRole = target.role;
+    if (oldRole === role) {
+      return res.json({
+        msg: `${username} already has ${role} role`,
+        member: {
+          username: target.username,
+          role: target.role,
+        },
+      });
+    }
+
     target.role = role;
     await target.save();
 
-    // Notify affected user in real-time if they're online
     const io = req.app.get('io');
     if (io) {
-      // Find socket of affected user
-      const sockets = await io.in(roomId).fetchSockets();
-      const targetSocket = sockets.find(s => s.username === username);
-      if (targetSocket) {
-        targetSocket.emit('role-changed', {
-          roomId,
-          oldRole,
-          newRole: role,
-          changedBy: req.auth.user.username,
-        });
-        // Update their role in socket data
-        targetSocket.userRole = role;
-      }
-      // Also broadcast to all room members that roles changed
+      await notifyRoleChange(io, roomId, target.userId, {
+        roomId,
+        oldRole,
+        newRole: role,
+        changedBy: req.auth.user.username,
+      });
       io.to(roomId).emit('members-updated', { roomId });
     }
 
@@ -175,11 +214,16 @@ router.put("/rooms/:roomId/members/:username/role", authJwt, requirePermission("
  */
 router.delete("/rooms/:roomId/members/:username", authJwt, requirePermission("REMOVE_MEMBERS"), async (req, res) => {
   try {
-    const { roomId, username } = req.params;
+    const { roomId } = req.params;
+    const username = decodeUsernameParam(req.params.username);
 
     const target = await RoomMember.findOne({ roomId, username });
     if (!target) {
       return res.status(404).json({ msg: "Member not found" });
+    }
+
+    if (String(target.userId) === String(req.roomMembership.userId)) {
+      return res.status(400).json({ msg: "Use transfer ownership or leave-room flow for yourself" });
     }
 
     // Cannot remove owner
@@ -195,6 +239,15 @@ router.delete("/rooms/:roomId/members/:username", authJwt, requirePermission("RE
     }
 
     await RoomMember.deleteOne({ _id: target._id });
+
+    const io = req.app.get("io");
+    if (io) {
+      await notifyRemovedMember(io, roomId, target.userId, {
+        roomId,
+        removedBy: req.auth.user.username,
+      });
+      io.to(roomId).emit("members-updated", { roomId });
+    }
 
     res.json({ msg: `Removed ${username} from room` });
   } catch (err) {
@@ -216,23 +269,47 @@ router.post("/rooms/:roomId/transfer-ownership", authJwt, requireMinRole("owner"
       return res.status(400).json({ msg: "New owner username is required" });
     }
 
-    // Find new owner
-    const newOwner = await RoomMember.findOne({ roomId, username: newOwnerUsername });
+    const safeUsername = decodeUsernameParam(newOwnerUsername);
+    const newOwner = await RoomMember.findOne({ roomId, username: safeUsername });
     if (!newOwner) {
       return res.status(404).json({ msg: "User is not a room member" });
     }
 
-    // Get current owner
-    const currentOwner = await RoomMember.findOne({ roomId, userId: req.auth.user.id });
+    const currentOwner = req.roomMembership;
+    if (!currentOwner || currentOwner.role !== "owner") {
+      return res.status(403).json({ msg: "Only room owner can transfer ownership" });
+    }
+    if (String(currentOwner.userId) === String(newOwner.userId)) {
+      return res.status(400).json({ msg: "User is already the room owner" });
+    }
 
-    // Transfer
+    const previousRole = newOwner.role;
     newOwner.role = "owner";
-    currentOwner.role = "admin"; // Demote to admin
+    currentOwner.role = "admin";
 
     await Promise.all([newOwner.save(), currentOwner.save()]);
 
+    const io = req.app.get("io");
+    if (io) {
+      await Promise.all([
+        notifyRoleChange(io, roomId, newOwner.userId, {
+          roomId,
+          oldRole: previousRole,
+          newRole: "owner",
+          changedBy: req.auth.user.username,
+        }),
+        notifyRoleChange(io, roomId, currentOwner.userId, {
+          roomId,
+          oldRole: "owner",
+          newRole: "admin",
+          changedBy: req.auth.user.username,
+        }),
+      ]);
+      io.to(roomId).emit("members-updated", { roomId });
+    }
+
     res.json({
-      msg: `Ownership transferred to ${newOwnerUsername}`,
+      msg: `Ownership transferred to ${safeUsername}`,
       previousOwner: currentOwner.username,
       newOwner: newOwner.username,
     });
@@ -291,7 +368,8 @@ router.get("/roles", authJwt, (req, res) => {
       level: 3,
       description: "Can manage members (except owner), edit files, push to GitHub",
       permissions: Object.keys(PERMISSIONS).filter((p) =>
-        !["MANAGE_ROLES", "CHANGE_ROLES", "TRANSFER_OWNERSHIP"].includes(p)
+        // FIX: Admin role metadata must match the route permission that allows lower-role changes.
+        !["CHANGE_ROLES", "TRANSFER_OWNERSHIP"].includes(p)
       ),
     },
     editor: {

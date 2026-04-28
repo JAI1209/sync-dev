@@ -14,6 +14,9 @@ export default function ParticipantsPanel({
   remoteVideoRefs,
 }) {
   const visibleUsers = showAll ? users : users.slice(0, 5);
+  const remoteEntries = Object.entries(remoteStreams || {});
+  const showRemoteVideos = showVideo && remoteEntries.length > 0;
+  const showVideoPanel = camOn || showRemoteVideos;
 
   return (
     <aside className="participants-panel">
@@ -24,47 +27,58 @@ export default function ParticipantsPanel({
         </div>
         <span className="participants-count">{users.length}</span>
       </div>
+
       <div className="participants-scroll">
-        {visibleUsers.map((u) => (
+        {visibleUsers.map((user) => (
           <div
-            key={u.id}
-            className={`participant-card ${mutedPeers.has(u.id) ? "muted" : ""}`}
-            onMouseEnter={() => setHoveredUser(u.id)}
+            key={user.id}
+            className={`participant-card ${mutedPeers.has(user.id) ? "muted" : ""}`}
+            onMouseEnter={() => setHoveredUser(user.id)}
             onMouseLeave={() => setHoveredUser(null)}
           >
-            <div className={`participant-avatar ${u.username === username ? "you" : ""}`}>
-              {u.username[0]?.toUpperCase()}
+            <div className={`participant-avatar ${user.username === username ? "you" : ""}`}>
+              {user.username[0]?.toUpperCase()}
             </div>
             <div className="participant-info">
-              <p className="participant-name">{u.username}</p>
-              <p className="participant-state">{u.username === username ? "you" : "team member"}</p>
+              <p className="participant-name">{user.username}</p>
+              <p className="participant-state">{user.username === username ? "you" : "team member"}</p>
+              {/* FIX: Show role badge per participant instead of hiding RBAC state behind generic copy. */}
+              <span className={`participant-role participant-role--${user.role || "viewer"}`}>
+                {user.role || "viewer"}
+              </span>
             </div>
             <span className="participant-status active" />
-            {hoveredUser === u.id && u.username !== username && (
+
+            {hoveredUser === user.id && user.username !== username && (
               <button
+                type="button"
                 className="participant-mute"
                 onClick={() =>
-                  setMutedPeers((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(u.id)) next.delete(u.id);
-                    else next.add(u.id);
+                  setMutedPeers((previous) => {
+                    const next = new Set(previous);
+                    if (next.has(user.id)) {
+                      next.delete(user.id);
+                    } else {
+                      next.add(user.id);
+                    }
                     return next;
                   })
                 }
               >
-                {mutedPeers.has(u.id) ? "🔇 Unmute" : "🔊 Mute"}
+                {mutedPeers.has(user.id) ? "Unmute" : "Mute"}
               </button>
             )}
           </div>
         ))}
+
         {users.length > 5 && (
-          <button className="participants-toggle" onClick={() => setShowAll((s) => !s)}>
+          <button className="participants-toggle" onClick={() => setShowAll((state) => !state)}>
             {showAll ? "Show less" : `Show all ${users.length}`}
           </button>
         )}
       </div>
 
-      {(camOn || Object.keys(remoteStreams).length > 0) && showVideo && (
+      {showVideoPanel && (
         <div className="video-panel">
           {camOn && (
             <div className="video-item">
@@ -72,20 +86,26 @@ export default function ParticipantsPanel({
               <span className="video-label">You</span>
             </div>
           )}
-          {Object.entries(remoteStreams).map(([peerId, { stream, username: peerName }]) => (
-            <div key={peerId} className="video-item">
-              <video
-                ref={(el) => {
-                  remoteVideoRefs.current[peerId] = el;
-                  if (el) el.srcObject = stream;
-                }}
-                autoPlay
-                playsInline
-                className="video-remote"
-              />
-              <span className="video-label">{peerName || "Peer"}</span>
-            </div>
-          ))}
+
+          {showRemoteVideos &&
+            remoteEntries.map(([peerId, { stream, username: peerName }]) => (
+              <div key={peerId} className="video-item">
+                <video
+                  ref={(element) => {
+                    remoteVideoRefs.current[peerId] = element;
+                    if (element) {
+                      element.srcObject = stream;
+                      // FIX: Apply persisted peer mute state when remote video refs mount.
+                      element.muted = mutedPeers.has(peerId);
+                    }
+                  }}
+                  autoPlay
+                  playsInline
+                  className="video-remote"
+                />
+                <span className="video-label">{peerName || "Peer"}</span>
+              </div>
+            ))}
         </div>
       )}
     </aside>

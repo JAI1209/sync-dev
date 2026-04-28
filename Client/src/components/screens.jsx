@@ -3,6 +3,7 @@
 
 import { GoogleLogin } from '@react-oauth/google'
 import { apiUrl } from '../api/client'
+import { useTheme } from '../context/ThemeContext.jsx'
 import {
   AlertBox,
   Button,
@@ -15,6 +16,7 @@ import {
   SessionCard,
   StatusPill,
   TerminalSpinner,
+  ThemeToggle,
 } from './ui'
 
 function AuthRail({ mode }) {
@@ -84,6 +86,8 @@ function LoginForm({
   onGoogleSuccess,  // NEW — passed from App.jsx
   onGoogleError,    // NEW — passed from App.jsx
 }) {
+  const { theme } = useTheme()
+
   return (
     <>
       <div className="form-intro">
@@ -158,7 +162,7 @@ function LoginForm({
         <GoogleLogin
           onSuccess={onGoogleSuccess}
           onError={onGoogleError}
-          theme="filled_black"
+          theme={theme === 'dark' ? 'filled_black' : 'outline'}
           shape="rectangular"
           width="100%"
         />
@@ -301,6 +305,7 @@ export function AppHeader({ activeScreen, isAuthenticated, logoSrc, onLogout, on
       </div>
 
       <div className="app-header__right">
+        <ThemeToggle />
         {isAuthenticated ? (
           <Button onClick={onLogout} variant="danger">
             Logout

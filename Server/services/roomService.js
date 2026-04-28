@@ -1,6 +1,6 @@
 const Room = require("../models/Room");
 const { EMPTY_ROOM_GRACE_MS } = require("../config/constants");
-const { redis } = require("../config/redis");
+const { redis, ensureRedisConnection } = require("../config/redis");
 
 const rooms = {};
 const emptyRoomTimers = new Map();
@@ -14,6 +14,8 @@ async function getRoom(roomId) {
   if (rooms[roomId]) return rooms[roomId];
 
   try {
+    const ready = await ensureRedisConnection();
+    if (!ready) return null;
     const raw = await redis.get(roomKey(roomId));
     if (!raw) return null;
     const room = JSON.parse(raw);
@@ -32,11 +34,25 @@ function getRooms() {
 async function setRoom(roomId, roomState) {
   rooms[roomId] = roomState;
   try {
+    const ready = await ensureRedisConnection();
+    if (!ready) return rooms[roomId];
     await redis.set(roomKey(roomId), JSON.stringify(roomState));
   } catch (err) {
     console.error(`Room SET error for ${roomId}:`, err.message);
   }
   return rooms[roomId];
+}
+
+async function destroyRoom(roomId) {
+  clearRoomCleanup(roomId);
+  delete rooms[roomId];
+  try {
+    const ready = await ensureRedisConnection();
+    if (!ready) return;
+    await redis.del(roomKey(roomId));
+  } catch (err) {
+    console.error(`Room destroy error for ${roomId}:`, err.message);
+  }
 }
 
 function clearRoomCleanup(roomId) {
@@ -57,7 +73,10 @@ function scheduleRoomCleanup(roomId) {
       if (!room) return;
       if (room.users.length === 0) {
         delete rooms[roomId];
-        redis.del(roomKey(roomId)).catch((err) =>
+        ensureRedisConnection().then((ready) => {
+          if (!ready) return;
+          return redis.del(roomKey(roomId));
+        }).catch((err) =>
           console.error(`Room cleanup delete error for ${roomId}:`, err.message)
         );
       }
@@ -204,6 +223,7 @@ module.exports = {
   getRoom,
   getRooms,
   setRoom,
+  destroyRoom,
   persistRoom,
   loadRoomFromDB,
   makeDefaultRoom,

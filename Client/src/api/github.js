@@ -15,13 +15,17 @@ export async function importGitHubRepo(owner, repo, ref) {
 }
 
 /**
- * @param {string} owner
- * @param {string} repo
- * @param {string} branch
- * @param {string} message
- * @param {{ path: string, content: string }[]} files
+ * FIX: Commit calls already pass a single object payload, so the API helper must
+ * destructure that object instead of reading positional arguments.
+ * @param {{
+ *   owner: string,
+ *   repo: string,
+ *   branch: string,
+ *   message: string,
+ *   files: { path: string, content: string }[]
+ * }} params
  */
-export async function commitGitHubRepo(owner, repo, branch, message, files) {
+export async function commitGitHubRepo({ owner, repo, branch, message, files }) {
   const res = await authFetch("/api/github/commit", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

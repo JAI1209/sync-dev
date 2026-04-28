@@ -1,17 +1,46 @@
 const { Server } = require("socket.io");
 const { createAdapter } = require("@socket.io/redis-adapter");
-const { redis } = require("../config/redis");
 const jwt = require("jsonwebtoken");
 const config = require("../config");
+const { redis, redisOptions, ensureRedisConnection } = require("../config/redis");
 const { registerRoomHandlers } = require("./roomHandler");
+
+async function attachRedisAdapter(io) {
+  const ready = await ensureRedisConnection();
+  if (!ready) {
+    console.warn("[Socket] Redis unavailable - using in-memory adapter");
+    return;
+  }
+
+  const pubClient = redis.duplicate({ ...redisOptions, lazyConnect: true });
+  const subClient = redis.duplicate({ ...redisOptions, lazyConnect: true });
+
+  pubClient.on("error", (err) => console.error("[Redis Adapter] pub error:", err.message));
+  subClient.on("error", (err) => console.error("[Redis Adapter] sub error:", err.message));
+
+  try {
+    await Promise.all([pubClient.connect(), subClient.connect()]);
+    io.adapter(createAdapter(pubClient, subClient));
+    console.log("[Socket] Redis adapter attached");
+  } catch (err) {
+    console.error("[Socket] Failed to attach Redis adapter, falling back to memory:", err.message);
+    try {
+      pubClient.disconnect();
+      subClient.disconnect();
+    } catch {
+      // no-op
+    }
+  }
+}
 
 async function initSocket(httpServer) {
   const io = new Server(httpServer, {
     cors: {
-      origin: function(origin, callback) {
-        const allowed = (process.env.CORS_ORIGINS || "http://localhost:5173")
+      origin(origin, callback) {
+        const allowed = (process.env.CLIENT_ORIGIN || process.env.CORS_ORIGINS || "http://localhost:5173")
           .split(",")
-          .map((o) => o.trim());
+          .map((value) => value.trim());
+
         if (!origin || allowed.includes(origin)) {
           callback(null, true);
         } else {
@@ -45,15 +74,7 @@ async function initSocket(httpServer) {
     }
   });
 
-  const pubClient = redis.duplicate({ lazyConnect: true });
-  const subClient = redis.duplicate({ lazyConnect: true });
-
-  pubClient.on("error", (err) => console.error("[Redis Adapter] pub error:", err.message));
-  subClient.on("error", (err) => console.error("[Redis Adapter] sub error:", err.message));
-
-  await Promise.all([pubClient.connect(), subClient.connect()]);
-  io.adapter(createAdapter(pubClient, subClient));
-  console.log("[Socket] Redis adapter attached");
+  await attachRedisAdapter(io);
 
   io.on("connection", (socket) => {
     registerRoomHandlers(io, socket);

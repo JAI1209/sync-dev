@@ -64,22 +64,41 @@ function normalizeGithubRepo(ownerIn, repoIn) {
   return { ok: true, owner, repo };
 }
 
-function importErrorResponse(e) {
+function importErrorResponse(e, context = {}) {
+  const hasGithubToken = Boolean(context.hasGithubToken);
+  const msg = String(e.message || "");
+
   if (e.status === 401) {
     return {
       status: 401,
       msg: "GitHub rejected the request. Sign in with GitHub again.",
     };
   }
+  if (e.status === 403) {
+    if (/rate limit/i.test(msg)) {
+      return {
+        status: 429,
+        msg: hasGithubToken
+          ? "GitHub rate limit reached. Try again later."
+          : "GitHub rate limit reached for anonymous import. Link GitHub or try again later.",
+      };
+    }
+    return {
+      status: 403,
+      msg: hasGithubToken
+        ? "GitHub denied access to that repository or branch. Check the repo, branch, and GitHub account permissions."
+        : "GitHub denied anonymous access to that repository or branch. If it is private, sign in with GitHub and try again.",
+    };
+  }
   if (e.status === 404) {
     return {
       status: 400,
       msg:
-        "GitHub could not find that repository or branch. Check owner and repo (e.g. facebook/react), or use the full repo URL. Profile links are not repo names.",
+        "GitHub could not find that repository or branch. Check owner and repo (e.g. facebook/react), the branch/ref, and if the repo is private sign in with GitHub.",
     };
   }
   const status = e.status && e.status >= 400 && e.status < 600 ? e.status : 502;
-  return { status, msg: e.message || "Import failed" };
+  return { status, msg: msg || "Import failed" };
 }
 
 function commitErrorResponse(e) {
@@ -137,30 +156,23 @@ router.post("/import", authJwt, async (req, res) => {
       "+githubAccessToken +githubRefreshToken githubTokenExpiry githubId"
     );
 
-    if (!user || !user.githubId) {
-      return res.status(403).json({
-        msg: "GitHub is not linked to this account. Sign in with GitHub from the login page.",
-      });
-    }
-
-    if (!user.githubAccessToken) {
-      return res.status(403).json({ msg: "No GitHub token on file. Sign in with GitHub again." });
-    }
-
-    if (user.githubTokenExpiry && user.githubTokenExpiry < new Date()) {
+    if (user?.githubAccessToken && user.githubTokenExpiry && user.githubTokenExpiry < new Date()) {
       const ok = await refreshGithubToken(user);
-      if (!ok) {
-        return res.status(401).json({ msg: "GitHub session expired. Sign in with GitHub again." });
+      if (ok) {
+        user = await User.findById(req.auth.user.id).select("+githubAccessToken +githubRefreshToken githubTokenExpiry githubId");
+      } else {
+        // FIX: Do not reuse an expired GitHub token after refresh failure; fall back to anonymous public import only.
+        user.githubAccessToken = "";
       }
-      user = await User.findById(req.auth.user.id).select("+githubAccessToken +githubRefreshToken githubTokenExpiry githubId");
     }
 
-    const token = user.githubAccessToken;
+    // FIX: Public repository imports should still work when this SyncDev account has no linked GitHub token.
+    const token = user?.githubAccessToken || "";
     let payload;
     try {
       payload = await importRepoFromGitHub({ owner, repo, ref, token });
     } catch (e) {
-      if (e.status === 401 && user.githubRefreshToken) {
+      if (e.status === 401 && user?.githubRefreshToken) {
         const refreshed = await refreshGithubToken(user);
         if (refreshed) {
           user = await User.findById(req.auth.user.id).select("+githubAccessToken githubId");
@@ -172,14 +184,14 @@ router.post("/import", authJwt, async (req, res) => {
               token: user.githubAccessToken,
             });
           } catch (e2) {
-            const r = importErrorResponse(e2);
+            const r = importErrorResponse(e2, { hasGithubToken: true });
             return res.status(r.status).json({ msg: r.msg });
           }
         } else {
           return res.status(401).json({ msg: "GitHub rejected the request. Sign in with GitHub again." });
         }
       } else {
-        const r = importErrorResponse(e);
+        const r = importErrorResponse(e, { hasGithubToken: Boolean(token) });
         return res.status(r.status).json({ msg: r.msg });
       }
     }

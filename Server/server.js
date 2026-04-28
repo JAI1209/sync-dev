@@ -18,6 +18,7 @@ const executeRoutes = require("./routes/execute");
 const aiRoutes = require("./routes/ai");
 const snapshotRoutes = require("./routes/snapshots");
 const rbacRoutes = require("./routes/rbac");
+const roomRoutes = require("./routes/rooms");
 const { morganMiddleware, logger } = require("./logger");
 const { rateLimitMiddleware, sanitizeInput, securityHeaders } = require("./middleware/security");
 const { connectDB } = require("./config/db");
@@ -28,7 +29,7 @@ const roomService = require("./services/roomService");
 const app = express();
 const server = http.createServer(app);
 
-const CORS_ORIGINS = (process.env.CORS_ORIGINS || "http://localhost:5173")
+const CORS_ORIGINS = (process.env.CLIENT_ORIGIN || process.env.CORS_ORIGINS || "http://localhost:5173")
   .split(",")
   .map((o) => o.trim());
 
@@ -59,6 +60,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/snapshots", snapshotRoutes);
 app.use("/api/rbac", rbacRoutes);
+app.use("/api/rooms", roomRoutes);
 app.use("/api/auth/github", githubOAuthRoutes);
 app.use("/api/github", githubImportRoutes);
 app.use("/api/execute", executeRoutes);
@@ -103,6 +105,5 @@ process.on("SIGINT", async () => {
   await disconnectRedis();
   process.exit(0);
 });
-
 
 

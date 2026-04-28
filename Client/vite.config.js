@@ -24,7 +24,8 @@ export default defineConfig(({ mode }) => {
       host: true,
       allowedHosts: true,
       headers: {
-        'Cross-Origin-Embedder-Policy': 'credentialless',
+        // FIX: WebContainers require SharedArrayBuffer, so dev must send COOP/COEP headers.
+        'Cross-Origin-Embedder-Policy': 'require-corp',
         'Cross-Origin-Opener-Policy': 'same-origin',
       },
       proxy: {
@@ -36,7 +37,7 @@ export default defineConfig(({ mode }) => {
     },
     preview: {
       headers: {
-        'Cross-Origin-Embedder-Policy': 'credentialless',
+        'Cross-Origin-Embedder-Policy': 'require-corp',
         'Cross-Origin-Opener-Policy': 'same-origin',
       },
     },

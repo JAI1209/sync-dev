@@ -77,15 +77,14 @@ jobs:
         working-directory: ./Client
         run: npm run build
       
-      - name: Test Server Start
+      - name: Run Vitest suite
         working-directory: ./Server
         env:
           MONGODB_URI: mongodb://localhost:27017/syncdev_test
+          REDIS_URL: redis://localhost:6379
           JWT_SECRET: test_secret_ci_only
           PORT: 3001
-        run: |
-          timeout 10s npm start || true
-          echo "Server start test passed"
+        run: npm test
 
   build-check:
     name: Build Check

@@ -4,11 +4,16 @@ const roomService = require("./roomService");
 const { generateNodeId } = require("../utils/ids");
 
 async function listSnapshots(roomId) {
-  return Snapshot.find({ roomId })
+  const snapshots = await Snapshot.find({ roomId })
     .sort({ createdAt: -1 })
     .limit(50)
-    .select("snapshotId name createdBy createdAt")
+    .select("snapshotId name createdBy createdAt files")
     .lean();
+  // FIX: Snapshot UI needs file counts without exposing file contents in the list response.
+  return snapshots.map(({ files, ...snapshot }) => ({
+    ...snapshot,
+    fileCount: files ? Object.keys(files).length : 0,
+  }));
 }
 
 async function createSnapshot(roomId, name, username, room) {

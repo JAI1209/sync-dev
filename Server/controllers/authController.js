@@ -5,7 +5,7 @@ const config = require("../config");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const { OAuth2Client } = require("google-auth-library");
-const client = new OAuth2Client(config.googleClientId);
+const RoomMember = require("../models/RoomMember");
 
 async function googleAuth(req, res) {
   const { credential } = req.body;
@@ -13,6 +13,8 @@ async function googleAuth(req, res) {
   if (!config.googleClientId) {
     return res.status(503).json({ msg: "Google sign-in is not configured." });
   }
+
+  const client = new OAuth2Client(config.googleClientId);
 
   try {
     const ticket = await client.verifyIdToken({
@@ -191,6 +193,32 @@ async function getMe(req, res) {
   }
 }
 
+async function getMyRooms(req, res) {
+  try {
+    const userId = req.auth?.user?.id;
+    if (!userId) {
+      return res.status(401).json({ msg: "Authentication required" });
+    }
+
+    // FIX: Dashboard recent rooms need a membership-backed API instead of local-only history.
+    const memberships = await RoomMember.find({ userId })
+      .sort({ lastActive: -1, joinedAt: -1 })
+      .limit(20)
+      .select("roomId role joinedAt lastActive");
+
+    return res.json({
+      rooms: memberships.map((member) => ({
+        roomId: member.roomId,
+        role: member.role,
+        joinedAt: member.joinedAt,
+        lastActive: member.lastActive,
+      })),
+    });
+  } catch (err) {
+    return res.status(500).json({ msg: "Failed to load rooms" });
+  }
+}
+
 module.exports = {
   googleAuth,
   register,
@@ -199,4 +227,5 @@ module.exports = {
   forgotPassword,
   resetPassword,
   getMe,
+  getMyRooms,
 };

@@ -6,6 +6,7 @@
 const mongoose = require("mongoose");
 const RoomMember = require("../models/RoomMember");
 const Room = require("../models/Room");
+const MEMBERSHIP_TOUCH_INTERVAL_MS = 30 * 1000;
 
 // Role hierarchy (higher = more permissions)
 const ROLE_HIERARCHY = {
@@ -20,7 +21,8 @@ const PERMISSIONS = {
   // Room management
   MANAGE_ROOM: ["owner", "admin"],           // Delete room, change settings
   INVITE_USERS: ["owner", "admin"],          // Invite new members
-  MANAGE_ROLES: ["owner"],                    // Change member roles
+  // FIX: Admins can change roles below their own level; route hierarchy checks still block owner/admin targets.
+  MANAGE_ROLES: ["owner", "admin"],           // Change member roles
   REMOVE_MEMBERS: ["owner", "admin"],        // Kick members
   MANAGE_MEMBERS: ["owner", "admin"],        // Combined invite/remove
   CHANGE_ROLES: ["owner"],                    // Promote/demote users
@@ -41,6 +43,7 @@ const PERMISSIONS = {
 
   // Git operations
   PUSH_TO_GITHUB: ["owner", "admin"],
+  // FIX: Bulk GitHub import checks this explicit permission before falling back to CREATE_FILES.
   IMPORT_FROM_GITHUB: ["owner", "admin", "editor"],
 
   // Snapshots
@@ -60,44 +63,133 @@ function hasPermission(role, permission) {
   return PERMISSIONS[permission].includes(role);
 }
 
+function toObjectId(value) {
+  if (!value) return null;
+  if (value instanceof mongoose.Types.ObjectId) return value;
+  if (typeof value === "object" && value._id) return toObjectId(value._id);
+  if (typeof value !== "string" || !mongoose.Types.ObjectId.isValid(value)) {
+    return null;
+  }
+  return new mongoose.Types.ObjectId(value);
+}
+
+function normalizeUsername(username) {
+  if (typeof username !== "string") return "anonymous";
+  const trimmed = username.trim();
+  return trimmed || "anonymous";
+}
+
+async function touchMembership(member, username) {
+  const now = Date.now();
+  const safeUsername = normalizeUsername(username);
+  const lastActiveMs = member.lastActive ? new Date(member.lastActive).getTime() : 0;
+  const shouldUpdateLastActive = now - lastActiveMs > MEMBERSHIP_TOUCH_INTERVAL_MS;
+  const shouldUpdateUsername = safeUsername && member.username !== safeUsername;
+
+  if (!shouldUpdateLastActive && !shouldUpdateUsername) {
+    return member;
+  }
+
+  const updates = {};
+  if (shouldUpdateLastActive) {
+    updates.lastActive = new Date(now);
+    member.lastActive = updates.lastActive;
+  }
+  if (shouldUpdateUsername) {
+    updates.username = safeUsername;
+    member.username = safeUsername;
+  }
+
+  await RoomMember.updateOne({ _id: member._id }, { $set: updates });
+  return member;
+}
+
 /**
  * Get or create room membership
  */
-async function getMembership(roomId, userId, username) {
-  // Validate userId is a valid MongoDB ObjectId string
-  if (!userId || !/^[0-9a-fA-F]{24}$/.test(userId)) {
-    console.log(`[RBAC] Invalid userId: ${userId}`);
+async function getMembership(roomId, userId, username, options = {}) {
+  const {
+    autoCreate = false,
+    defaultRole = "viewer",
+    touch = true,
+  } = options;
+
+  if (!roomId) return null;
+
+  const userIdObj = toObjectId(userId);
+  if (!userIdObj) {
     return null;
   }
 
-  const userIdObj = new mongoose.Types.ObjectId(userId);
-
   let member = await RoomMember.findOne({ roomId, userId: userIdObj });
 
-  if (!member) {
-    // Check if room exists
-    const room = await Room.findOne({ roomId });
-
-    if (!room) {
-      // Room doesn't exist, this user will be the owner
-      return null; // Let calling code handle ownership assignment
+  if (!member && autoCreate) {
+    const roomExists = await Room.exists({ roomId });
+    if (!roomExists) {
+      return null;
     }
 
-    // Room exists, add as viewer by default
-    member = new RoomMember({
-      roomId,
-      userId: userIdObj,
-      username,
-      role: "viewer",
-    });
-    await member.save();
+    try {
+      member = await RoomMember.create({
+        roomId,
+        userId: userIdObj,
+        username: normalizeUsername(username),
+        role: defaultRole,
+      });
+    } catch (err) {
+      if (err.code !== 11000) throw err;
+      member = await RoomMember.findOne({ roomId, userId: userIdObj });
+    }
   }
 
-  // Update last active (don't require userId validation for this)
-  member.lastActive = new Date();
-  await member.save();
+  if (!member) {
+    return null;
+  }
+
+  if (touch) {
+    return touchMembership(member, username);
+  }
 
   return member;
+}
+
+/**
+ * Ensure room membership exists during socket join.
+ * First member in a room becomes owner; later users can be auto-added as viewers.
+ */
+async function ensureRoomMembership(roomId, userId, username, options = {}) {
+  const { autoCreateViewer = true } = options;
+  const userIdObj = toObjectId(userId);
+  if (!userIdObj) {
+    return null;
+  }
+
+  const existing = await getMembership(roomId, userIdObj, username, { touch: true });
+  if (existing) {
+    return existing;
+  }
+
+  const hasOwner = await RoomMember.exists({ roomId, role: "owner" });
+  if (!hasOwner) {
+    return assignRoomOwner(roomId, userIdObj, username);
+  }
+
+  if (!autoCreateViewer) {
+    return null;
+  }
+
+  try {
+    await RoomMember.create({
+      roomId,
+      userId: userIdObj,
+      username: normalizeUsername(username),
+      role: "viewer",
+    });
+  } catch (err) {
+    if (err.code !== 11000) throw err;
+  }
+
+  return getMembership(roomId, userIdObj, username, { touch: true });
 }
 
 /**
@@ -114,20 +206,13 @@ function requirePermission(permission) {
         return res.status(401).json({ msg: "Authentication required" });
       }
 
-      // Validate userId format
-      if (!/^[0-9a-fA-F]{24}$/.test(userId)) {
+      if (!toObjectId(userId)) {
         return res.status(400).json({ msg: "Invalid user ID format" });
       }
 
-      const member = await getMembership(roomId, userId, username);
+      const member = await getMembership(roomId, userId, username, { touch: true });
 
       if (!member) {
-        // No membership - check if they're creating a new room
-        if (req.method === "POST" && req.path.includes("/snapshots")) {
-          // Allow creating snapshots for new rooms (owner will be set)
-          req.userRole = "owner";
-          return next();
-        }
         return res.status(403).json({ msg: "Access denied - not a room member" });
       }
 
@@ -165,12 +250,11 @@ function requireMinRole(minRole) {
         return res.status(401).json({ msg: "Authentication required" });
       }
 
-      // Validate userId format
-      if (!/^[0-9a-fA-F]{24}$/.test(userId)) {
+      if (!toObjectId(userId)) {
         return res.status(400).json({ msg: "Invalid user ID format" });
       }
 
-      const member = await getMembership(roomId, userId, username);
+      const member = await getMembership(roomId, userId, username, { touch: true });
 
       if (!member) {
         return res.status(403).json({ msg: "Access denied" });
@@ -224,7 +308,7 @@ async function socketAuthMiddleware(socket, next) {
  * Socket permission check - for use inside socket handlers
  */
 async function checkSocketPermission(socket, roomId, permission) {
-  const member = await getMembership(roomId, socket.userId, socket.username);
+  const member = await getMembership(roomId, socket.userId, socket.username, { touch: false });
 
   if (!member) {
     return { allowed: false, reason: "Not a room member" };
@@ -246,40 +330,34 @@ async function checkSocketPermission(socket, roomId, permission) {
  * Uses atomic upsert to prevent race conditions
  */
 async function assignRoomOwner(roomId, userId, username) {
-  // Validate userId
-  if (!userId || !/^[0-9a-fA-F]{24}$/.test(userId)) {
+  const userIdObj = toObjectId(userId);
+  if (!userIdObj) {
     throw new Error("Invalid userId for owner assignment");
   }
 
-  const userIdObj = new mongoose.Types.ObjectId(userId);
-
   try {
-    // Bug 3 Fix: Check if owner exists first, don't use upsert with role query
     const existingOwner = await RoomMember.findOne({ roomId, role: "owner" });
     if (existingOwner) {
-      if (existingOwner.userId.toString() === userId) {
-        return existingOwner; // This user is already owner
+      if (existingOwner.userId.equals(userIdObj)) {
+        return touchMembership(existingOwner, username);
       }
       throw new Error("Room already has an owner");
     }
 
-    // No owner exists, create one
     const member = new RoomMember({
       roomId,
       userId: userIdObj,
-      username,
+      username: normalizeUsername(username),
       role: "owner",
-      joinedAt: new Date()
+      joinedAt: new Date(),
     });
     await member.save();
     return member;
   } catch (err) {
-    // Duplicate key error = another request won the race
     if (err.code === 11000) {
       const existing = await RoomMember.findOne({ roomId, role: "owner" });
-      if (existing && existing.userId.toString() === userId) {
-        // This user is already the owner
-        return existing;
+      if (existing && existing.userId.equals(userIdObj)) {
+        return touchMembership(existing, username);
       }
       throw new Error("Room already has an owner");
     }
@@ -289,7 +367,9 @@ async function assignRoomOwner(roomId, userId, username) {
 
 module.exports = {
   hasPermission,
+  toObjectId,
   getMembership,
+  ensureRoomMembership,
   requirePermission,
   requireMinRole,
   socketAuthMiddleware,

@@ -1,276 +1,146 @@
-import { useState, useEffect } from 'react'
-import { Routes, Route, Navigate, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
-import { AppHeader, AuthScreen, DashboardScreen } from './components/screens'
-import Editor from './pages/Editor'
-import GitHubAuthCallback from './pages/GitHubAuthCallback'
-import logoSrc from './assets/SD.png'
-import { loginUser, googleLogin, registerUser } from './api/auth'
-import { apiUrl } from './api/client'
-import { importGitHubRepo } from './api/github'
-import { generateRoomId } from './utils/ids'
-import { useAuth } from './context/AuthContext'
-
-
-
-// ─── helpers ────────────────────────────────────────────────────────────────
-const SESSIONS_KEY = 'syncdev_recent_sessions'
-
-function loadSessions() {
-  try { return JSON.parse(localStorage.getItem(SESSIONS_KEY)) || [] }
-  catch { return [] }
-}
-
-function saveSessions(sessions) {
-  localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions))
-}
-
-function addSession(sessions, id) {
-  const now = new Date()
-  const label = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  const newSession = { id, status: 'live', participants: 1, created: `Today ${label}` }
-  // deduplicate — if same room rejoined, bump it to top
-  const filtered = sessions.filter(s => s.id !== id)
-  const updated = [newSession, ...filtered].slice(0, 10) // keep last 10
-  saveSessions(updated)
-  return updated
-}
+import { useEffect, useState } from "react";
+import { Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { AppHeader, AuthScreen } from "./components/screens";
+import Dashboard from "./pages/Dashboard";
+import Editor from "./pages/Editor";
+import GitHubAuthCallback from "./pages/GitHubAuthCallback";
+import logoSrc from "./assets/SD.png";
+import { googleLogin, loginUser, registerUser } from "./api/auth";
+import { useAuth } from "./context/AuthContext";
 
 export default function App() {
-  const { token, setToken, username, handleLogout } = useAuth()
-  const navigate = useNavigate()
-  const location = useLocation()
-  const [searchParams] = useSearchParams()
-  const githubErrorQ = searchParams.get('github_error')
+  const { token, setToken, username, handleLogout } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const githubErrorQ = searchParams.get("github_error");
 
-  // ── auth screen state ──────────────────────────────────────────────────────
-  const [authMode, setAuthMode] = useState('login') // 'login' | 'register' | 'forgot'
-  const [authBusy, setAuthBusy] = useState(null)    // 'login' | 'register' | 'forgot' | null
-  const [authBanner, setAuthBanner] = useState(null) // { tone, title, detail }
-  const [showPassword, setShowPassword] = useState(false)
+  const [authMode, setAuthMode] = useState("login");
+  const [authBusy, setAuthBusy] = useState(null);
+  const [authBanner, setAuthBanner] = useState(null);
+  const [showPassword, setShowPassword] = useState(false);
 
-  const [loginForm, setLoginForm] = useState({ username: '', password: '', remember: false })
-  const [registerForm, setRegisterForm] = useState({ username: '', email: '', password: '', confirmPassword: '' })
-  const [forgotForm, setForgotForm] = useState({ email: '' })
-
-  // ── dashboard state ────────────────────────────────────────────────────────
-  const [joinRoomId, setJoinRoomId] = useState('')
-  const [dashboardBusy, setDashboardBusy] = useState(null)
-  const [dashboardBanner, setDashboardBanner] = useState(null)
-  const [recentSessions, setRecentSessions] = useState(loadSessions)
-
-  const [githubConnected, setGithubConnected] = useState(false)
-  const [ghOwner, setGhOwner] = useState('')
-  const [ghRepo, setGhRepo] = useState('')
-  const [ghRef, setGhRef] = useState('')
-  const [githubImportBusy, setGithubImportBusy] = useState(false)
+  const [loginForm, setLoginForm] = useState({ username: "", password: "", remember: false });
+  const [registerForm, setRegisterForm] = useState({
+    username: "",
+    email: "",
+    password: "",
+    confirmPassword: "",
+  });
+  const [forgotForm, setForgotForm] = useState({ email: "" });
 
   useEffect(() => {
-    if (!token) {
-      setGithubConnected(false)
-      return
-    }
-    let cancelled = false
-    fetch(apiUrl('/api/auth/me'), { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((d) => {
-        if (!cancelled) setGithubConnected(Boolean(d.githubConnected))
-      })
-      .catch(() => {
-        if (!cancelled) setGithubConnected(false)
-      })
-    return () => { cancelled = true }
-  }, [token])
-
-  useEffect(() => {
-    if (token || location.pathname !== '/login' || !githubErrorQ) return
+    if (token || location.pathname !== "/login" || !githubErrorQ) return;
     setAuthBanner({
-      tone: 'danger',
-      title: 'GitHub sign-in',
+      tone: "danger",
+      title: "GitHub sign-in",
       detail: decodeURIComponent(githubErrorQ),
-    })
-  }, [githubErrorQ, location.pathname, token])
+    });
+  }, [githubErrorQ, location.pathname, token]);
 
+  const handleLoginChange = (field, value) => {
+    setLoginForm((prev) => ({ ...prev, [field]: value }));
+  };
 
-  // ── auth handlers ──────────────────────────────────────────────────────────
-  const handleLoginChange = (field, value) =>
-    setLoginForm(prev => ({ ...prev, [field]: value }))
+  const handleLoginSubmit = async (event) => {
+    event.preventDefault();
+    setAuthBanner(null);
+    setAuthBusy("login");
+    const data = await loginUser(loginForm.username, loginForm.password);
+    setAuthBusy(null);
 
-  const handleLoginSubmit = async (e) => {
-    e.preventDefault()
-    setAuthBanner(null)
-    setAuthBusy('login')
-    const data = await loginUser(loginForm.username, loginForm.password)
-    setAuthBusy(null)
     if (data.token) {
-      setToken(data.token)
-if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken)
-      navigate('/dashboard')
-    } else {
-      setAuthBanner({ tone: 'danger', title: 'Auth failed', detail: data.msg || 'Invalid credentials' })
+      setToken(data.token);
+      if (data.refreshToken) localStorage.setItem("refreshToken", data.refreshToken);
+      navigate("/dashboard");
+      return;
     }
-  }
+
+    setAuthBanner({ tone: "danger", title: "Auth failed", detail: data.msg || "Invalid credentials" });
+  };
 
   const handleGoogleSuccess = async (credentialResponse) => {
-    setAuthBanner(null)
-    const data = await googleLogin(credentialResponse.credential)
+    setAuthBanner(null);
+    const data = await googleLogin(credentialResponse.credential);
+
     if (data.token) {
-      setToken(data.token)
-if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken)
-      navigate('/dashboard')
-    } else {
-      setAuthBanner({ tone: 'danger', title: 'Google login failed', detail: 'Try again or use username/password' })
+      setToken(data.token);
+      if (data.refreshToken) localStorage.setItem("refreshToken", data.refreshToken);
+      navigate("/dashboard");
+      return;
     }
-  }
 
-  const handleRegisterChange = (field, value) =>
-    setRegisterForm(prev => ({ ...prev, [field]: value }))
+    setAuthBanner({
+      tone: "danger",
+      title: "Google login failed",
+      detail: "Try again or use username/password",
+    });
+  };
 
-  const handleRegisterSubmit = async (e) => {
-    e.preventDefault()
-    setAuthBanner(null)
+  const handleRegisterChange = (field, value) => {
+    setRegisterForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleRegisterSubmit = async (event) => {
+    event.preventDefault();
+    setAuthBanner(null);
+
     if (registerForm.password !== registerForm.confirmPassword) {
-      setAuthBanner({ tone: 'danger', title: 'Password mismatch', detail: 'Both password fields must match' })
-      return
+      setAuthBanner({ tone: "danger", title: "Password mismatch", detail: "Both password fields must match" });
+      return;
     }
-    setAuthBusy('register')
-    const data = await registerUser(registerForm.username, registerForm.password, registerForm.email)
-    setAuthBusy(null)
+
+    setAuthBusy("register");
+    const data = await registerUser(registerForm.username, registerForm.password, registerForm.email);
+    setAuthBusy(null);
+
     if (data.token) {
-      setAuthBanner({ tone: 'success', title: 'Account created', detail: 'You can now sign in' })
-      setAuthMode('login')
-    } else {
-      setAuthBanner({ tone: 'danger', title: 'Registration failed', detail: data.msg || 'Try a different username' })
+      setAuthBanner({ tone: "success", title: "Account created", detail: "You can now sign in" });
+      setAuthMode("login");
+      return;
     }
-  }
 
-  const handleForgotChange = (field, value) =>
-    setForgotForm(prev => ({ ...prev, [field]: value }))
+    setAuthBanner({
+      tone: "danger",
+      title: "Registration failed",
+      detail: data.msg || "Try a different username",
+    });
+  };
 
-  const handleForgotSubmit = async (e) => {
-    e.preventDefault()
-    setAuthBusy('forgot')
+  const handleForgotChange = (field, value) => {
+    setForgotForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleForgotSubmit = async (event) => {
+    event.preventDefault();
+    setAuthBusy("forgot");
+
     try {
-      const res = await fetch(apiUrl('/api/auth/forgot'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/auth/forgot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: forgotForm.email }),
-      })
-      const data = await res.json()
-      setAuthBanner({ tone: res.ok ? 'success' : 'danger', title: res.ok ? 'Reset link queued' : 'Error', detail: data.msg || (res.ok ? 'Check your inbox' : 'Please try again') })
+      });
+      const data = await res.json();
+      setAuthBanner({
+        tone: res.ok ? "success" : "danger",
+        title: res.ok ? "Reset link queued" : "Error",
+        detail: data.msg || (res.ok ? "Check your inbox" : "Please try again"),
+      });
     } catch {
-      setAuthBanner({ tone: 'danger', title: 'Network error', detail: 'Could not reach server' })
+      setAuthBanner({ tone: "danger", title: "Network error", detail: "Could not reach server" });
     } finally {
-      setAuthBusy(null)
+      setAuthBusy(null);
     }
-  }
+  };
 
-  // clears banner when switching modes
   const handleAuthNavigate = (mode) => {
-    setAuthBanner(null)
-    if (mode === 'login') navigate('/login')
-    else if (mode === 'register') navigate('/register')
-    else setAuthMode(mode)
-  }
+    setAuthBanner(null);
+    if (mode === "login") navigate("/login");
+    else if (mode === "register") navigate("/register");
+    else setAuthMode(mode);
+  };
 
-  // ── dashboard handlers ─────────────────────────────────────────────────────
-  const handleInitializeSession = () => {
-    setDashboardBusy('create')
-    const id = generateRoomId()
-    setTimeout(() => {
-      setDashboardBusy(null)
-      setRecentSessions(prev => addSession(prev, id))
-      navigate(`/editor/${id}`)
-    }, 600)
-  }
-
-  const handleJoinSession = (e) => {
-    e.preventDefault()
-    const rawId = joinRoomId.trim()
-    if (!rawId) {
-      setDashboardBanner({ tone: 'danger', title: 'No room ID', detail: 'Enter a room code to connect' })
-      return
-    }
-    const id = rawId.toUpperCase()
-    if (!/^[A-HJ-NP-Z2-9]{8}$/.test(id)) {
-      setDashboardBanner({ tone: 'danger', title: 'Invalid room ID', detail: 'Room codes must be 8 characters long and use the correct format.' })
-      return
-    }
-    setDashboardBusy('join')
-    setTimeout(() => {
-      setDashboardBusy(null)
-      setRecentSessions(prev => addSession(prev, id))
-      navigate(`/editor/${id}`)
-    }, 500)
-  }
-
-  const [reconnectingId, setReconnectingId] = useState(null)
-
-  const handleReconnect = (session) => {
-    setReconnectingId(session.id)
-    setTimeout(() => {
-      setReconnectingId(null)
-      navigate(`/editor/${session.id}`)
-    }, 500)
-  }
-
-  const handleGitHubImportSubmit = async (e) => {
-    e.preventDefault()
-    setDashboardBanner(null)
-    const o = ghOwner.trim()
-    const r = ghRepo.trim()
-    if (!githubConnected) {
-      setDashboardBanner({
-        tone: 'danger',
-        title: 'GitHub',
-        detail: 'Sign in with GitHub from the login page first.',
-      })
-      return
-    }
-    if (!o || !r) {
-      setDashboardBanner({
-        tone: 'danger',
-        title: 'Repository',
-        detail: 'Enter owner and repository name.',
-      })
-      return
-    }
-    setGithubImportBusy(true)
-    try {
-      const data = await importGitHubRepo(o, r, ghRef.trim() || undefined)
-      const ids = Object.keys(data.files || {})
-      if (!ids.length) {
-        setDashboardBanner({
-          tone: 'danger',
-          title: 'Nothing to import',
-          detail: 'No matching text files found for this branch (check ignores and size limits).',
-        })
-        return
-      }
-      const id = generateRoomId()
-      sessionStorage.setItem(
-        'syncdev_pending_import',
-        JSON.stringify({
-          roomId: id,
-          files: data.files,
-          folders: data.folders || {},
-          orderedFileIds: data.orderedFileIds || ids,
-          github: data.meta || null,
-        })
-      )
-      setRecentSessions((prev) => addSession(prev, id))
-      navigate(`/editor/${id}`)
-    } catch (err) {
-      setDashboardBanner({
-        tone: 'danger',
-        title: 'GitHub import',
-        detail: err.message || 'Request failed',
-      })
-    } finally {
-      setGithubImportBusy(false)
-    }
-  }
-
-  // ── shared auth screen props ───────────────────────────────────────────────
   const authProps = {
     mode: authMode,
     authBanner,
@@ -286,27 +156,27 @@ if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken)
     onForgotChange: handleForgotChange,
     onForgotSubmit: handleForgotSubmit,
     onNavigate: handleAuthNavigate,
-    onTogglePassword: () => setShowPassword(p => !p),
-    // Google OAuth — pass the raw handler; AuthScreen renders GoogleLogin component
+    onTogglePassword: () => setShowPassword((prev) => !prev),
     onGoogleSuccess: handleGoogleSuccess,
-    onGoogleError: () => setAuthBanner({ tone: 'danger', title: 'Google login failed' }),
-  }
+    onGoogleError: () => setAuthBanner({ tone: "danger", title: "Google login failed" }),
+  };
 
   return (
     <div className="app-shell">
       <Routes>
-        {/* ── AUTH ── */}
         <Route
           path="/login"
           element={
-            token ? <Navigate to="/dashboard" /> : (
+            token ? (
+              <Navigate to="/dashboard" />
+            ) : (
               <>
                 <AppHeader
                   activeScreen="login"
                   isAuthenticated={false}
                   logoSrc={logoSrc}
-                  onNavigate={handleAuthNavigate}
                   onLogout={handleLogout}
+                  onNavigate={handleAuthNavigate}
                 />
                 <AuthScreen {...authProps} mode="login" />
               </>
@@ -319,14 +189,16 @@ if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken)
         <Route
           path="/register"
           element={
-            token ? <Navigate to="/dashboard" /> : (
+            token ? (
+              <Navigate to="/dashboard" />
+            ) : (
               <>
                 <AppHeader
                   activeScreen="register"
                   isAuthenticated={false}
                   logoSrc={logoSrc}
-                  onNavigate={handleAuthNavigate}
                   onLogout={handleLogout}
+                  onNavigate={handleAuthNavigate}
                 />
                 <AuthScreen {...authProps} mode="register" />
               </>
@@ -334,53 +206,21 @@ if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken)
           }
         />
 
-        {/* ── DASHBOARD ── */}
         <Route
           path="/dashboard"
           element={
             token ? (
-              <>
-                <AppHeader
-                  activeScreen="dashboard"
-                  isAuthenticated={true}
-                  logoSrc={logoSrc}
-                  onLogout={handleLogout}
-                  onNavigate={handleAuthNavigate}
-                />
-                <DashboardScreen
-                  activeUser={username}
-                  dashboardBanner={dashboardBanner}
-                  dashboardBusy={dashboardBusy}
-                  joinRoomId={joinRoomId}
-                  onInitializeSession={handleInitializeSession}
-                  onJoinRoomIdChange={setJoinRoomId}
-                  onJoinSession={handleJoinSession}
-                  onReconnect={handleReconnect}
-                  reconnectingId={reconnectingId}
-                  recentSessions={recentSessions}
-                  githubConnected={githubConnected}
-                  githubImportBusy={githubImportBusy}
-                  ghOwner={ghOwner}
-                  ghRepo={ghRepo}
-                  ghRef={ghRef}
-                  onGhOwnerChange={setGhOwner}
-                  onGhRepoChange={setGhRepo}
-                  onGhRefChange={setGhRef}
-                  onGitHubImportSubmit={handleGitHubImportSubmit}
-                />
-              </>
-            ) : <Navigate to="/login" />
+              // FIX: Route the actual dashboard page so the repaired Dashboard.jsx UI is used.
+              <Dashboard onLogout={handleLogout} username={username} />
+            ) : (
+              <Navigate to="/login" />
+            )
           }
         />
 
-        {/* ── EDITOR (unchanged — your working socket logic) ── */}
-        <Route
-          path="/editor/:roomId"
-          element={token ? <Editor username={username} /> : <Navigate to="/login" />}
-        />
-
-        <Route path="*" element={<Navigate to={token ? '/dashboard' : '/login'} />} />
+        <Route path="/editor/:roomId" element={token ? <Editor username={username} /> : <Navigate to="/login" />} />
+        <Route path="*" element={<Navigate to={token ? "/dashboard" : "/login"} />} />
       </Routes>
     </div>
-  )
+  );
 }

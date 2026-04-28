@@ -7,7 +7,7 @@ const RTC_CONFIG = {
   ],
 };
 
-export function useWebRTC({ socketRef, joined, usersRef }) {
+export function useWebRTC({ socketRef, joined, usersRef, showVideo }) {
   const [micOn, setMicOn] = useState(false);
   const [camOn, setCamOn] = useState(false);
   const [remoteStreams, setRemoteStreams] = useState({});
@@ -19,17 +19,38 @@ export function useWebRTC({ socketRef, joined, usersRef }) {
   const pcsRef = useRef({});
   const iceBufRef = useRef({});
   const makingOfferRef = useRef({});
+  const callEndedRef = useRef(false);
+
+  const removePeer = useCallback((peerId) => {
+    setRemoteStreams((prev) => {
+      if (!prev[peerId]) return prev;
+      const next = { ...prev };
+      delete next[peerId];
+      return next;
+    });
+
+    const pc = pcsRef.current[peerId];
+    if (pc) {
+      pc.close();
+      delete pcsRef.current[peerId];
+    }
+
+    delete iceBufRef.current[peerId];
+    delete remoteVideoRefs.current[peerId];
+  }, []);
 
   const drainIce = useCallback(async (id) => {
     const pc = pcsRef.current[id];
     if (!pc?.remoteDescription) return;
+
     for (const candidate of iceBufRef.current[id] || []) {
       try {
         await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (err) {
-        console.warn("[ICE] drain error", err);
+      } catch (error) {
+        console.warn("[ICE] drain error", error);
       }
     }
+
     delete iceBufRef.current[id];
   }, []);
 
@@ -47,7 +68,7 @@ export function useWebRTC({ socketRef, joined, usersRef }) {
 
     pc.ontrack = ({ streams }) => {
       const stream = streams[0];
-      const user = usersRef?.current?.find((u) => u.id === remoteId);
+      const user = usersRef?.current?.find((entry) => entry.id === remoteId);
       setRemoteStreams((prev) => ({
         ...prev,
         [remoteId]: { stream, username: user?.username || "Peer" },
@@ -56,31 +77,27 @@ export function useWebRTC({ socketRef, joined, usersRef }) {
 
     pc.onconnectionstatechange = () => {
       if (["disconnected", "failed", "closed"].includes(pc.connectionState)) {
-        setRemoteStreams((prev) => {
-          const next = { ...prev };
-          delete next[remoteId];
-          return next;
-        });
-        delete pcsRef.current[remoteId];
+        removePeer(remoteId);
       }
     };
 
     return pc;
-  }, [socketRef]);
+  }, [removePeer, socketRef, usersRef]);
 
   const sendOffer = useCallback(async (remoteId) => {
+    if (callEndedRef.current) return;
     const pc = pcsRef.current[remoteId];
     if (!pc || makingOfferRef.current[remoteId]) return;
-    makingOfferRef.current[remoteId] = true;
 
+    makingOfferRef.current[remoteId] = true;
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       if (socketRef.current?.connected) {
         socketRef.current.emit("webrtc-offer", { to: remoteId, offer: pc.localDescription });
       }
-    } catch (err) {
-      console.error("[RTC] sendOffer error", err);
+    } catch (error) {
+      console.error("[RTC] sendOffer error", error);
     } finally {
       makingOfferRef.current[remoteId] = false;
     }
@@ -88,33 +105,77 @@ export function useWebRTC({ socketRef, joined, usersRef }) {
 
   const addTrackToAll = useCallback(async (track, stream) => {
     for (const [peerId, pc] of Object.entries(pcsRef.current)) {
-      if (!pc.getSenders().some((sender) => sender.track === track)) {
-        pc.addTrack(track, stream);
+      if (pc.getSenders().some((sender) => sender.track === track)) continue;
+      pc.addTrack(track, stream);
+      await sendOffer(peerId);
+    }
+  }, [sendOffer]);
+
+  const connectToExistingPeers = useCallback(async () => {
+    if (callEndedRef.current) return;
+    const socket = socketRef.current;
+    if (!socket?.connected) return;
+
+    const peerIds = (usersRef?.current || [])
+      .map((entry) => entry.id)
+      .filter((id) => id && id !== socket.id);
+
+    for (const peerId of peerIds) {
+      const pc = createPC(peerId);
+      localStreamRef.current?.getTracks().forEach((track) => {
+        if (!pc.getSenders().some((sender) => sender.track === track)) {
+          pc.addTrack(track, localStreamRef.current);
+        }
+      });
+      await sendOffer(peerId);
+    }
+  }, [createPC, sendOffer, socketRef, usersRef]);
+
+  const replaceTrackInAll = useCallback(async (kind, newTrack) => {
+    for (const [peerId, pc] of Object.entries(pcsRef.current)) {
+      const sender = pc.getSenders().find((entry) => entry.track?.kind === kind);
+
+      if (sender && newTrack) {
+        await sender.replaceTrack(newTrack);
+        continue;
+      }
+
+      if (sender && !newTrack) {
+        pc.removeTrack(sender);
+        await sendOffer(peerId);
+        continue;
+      }
+
+      if (!sender && newTrack && localStreamRef.current) {
+        pc.addTrack(newTrack, localStreamRef.current);
         await sendOffer(peerId);
       }
     }
   }, [sendOffer]);
 
-  const replaceTrackInAll = useCallback(async (kind, newTrack) => {
-    for (const pc of Object.values(pcsRef.current)) {
-      const sender = pc.getSenders().find((s) => s.track?.kind === kind);
-      if (sender && newTrack) {
-        await sender.replaceTrack(newTrack);
-      } else if (sender && !newTrack) {
-        pc.removeTrack(sender);
-        await sendOffer(Object.keys(pcsRef.current).find((id) => pcsRef.current[id] === pc));
-      } else if (!sender && newTrack) {
-        pc.addTrack(newTrack, localStreamRef.current);
-        await sendOffer(Object.keys(pcsRef.current).find((id) => pcsRef.current[id] === pc));
+  const attachStreamToVideo = useCallback((videoEl, stream) => {
+    if (!videoEl || !stream) return;
+    if (videoEl.srcObject === stream) return;
+
+    videoEl.srcObject = stream;
+    videoEl.play().catch((error) => {
+      if (error.name !== "AbortError") {
+        console.warn("[Video] play()", error);
       }
-    }
-  }, [sendOffer]);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!camOn || !showVideo) return;
+    attachStreamToVideo(localVideoRef.current, localStreamRef.current);
+  }, [camOn, showVideo, attachStreamToVideo]);
 
   useEffect(() => {
     const socket = socketRef.current;
     if (!socket || !joined) return undefined;
 
     const handlePeerJoined = ({ socketId }) => {
+      if (callEndedRef.current) return;
       const pc = createPC(socketId);
       localStreamRef.current?.getTracks().forEach((track) => {
         if (!pc.getSenders().some((sender) => sender.track === track)) {
@@ -124,67 +185,93 @@ export function useWebRTC({ socketRef, joined, usersRef }) {
       sendOffer(socketId);
     };
 
+    const handlePeerLeft = ({ socketId }) => {
+      if (!socketId) return;
+      removePeer(socketId);
+    };
+
     const handleOffer = async ({ from, offer }) => {
+      if (callEndedRef.current) return;
       const pc = createPC(from);
+
       localStreamRef.current?.getTracks().forEach((track) => {
         if (!pc.getSenders().some((sender) => sender.track === track)) {
           pc.addTrack(track, localStreamRef.current);
         }
       });
+
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         await drainIce(from);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         socket.emit("webrtc-answer", { to: from, answer: pc.localDescription });
-      } catch (err) {
-        console.error("[Signal] offer handler", err);
+      } catch (error) {
+        console.error("[Signal] offer handler", error);
       }
     };
 
     const handleAnswer = async ({ from, answer }) => {
+      if (callEndedRef.current) return;
       const pc = pcsRef.current[from];
       if (!pc) return;
+
       try {
         if (pc.signalingState === "have-local-offer") {
           await pc.setRemoteDescription(new RTCSessionDescription(answer));
           await drainIce(from);
         }
-      } catch (err) {
-        console.error("[Signal] answer handler", err);
+      } catch (error) {
+        console.error("[Signal] answer handler", error);
       }
     };
 
     const handleIceCandidate = async ({ from, candidate }) => {
+      if (callEndedRef.current) return;
       const pc = pcsRef.current[from];
       if (pc?.remoteDescription) {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (err) {
-          console.warn("[ICE] addIceCandidate error", err);
+        } catch (error) {
+          console.warn("[ICE] addIceCandidate error", error);
         }
-      } else {
-        if (!iceBufRef.current[from]) iceBufRef.current[from] = [];
-        iceBufRef.current[from].push(candidate);
+        return;
       }
+
+      if (!iceBufRef.current[from]) iceBufRef.current[from] = [];
+      iceBufRef.current[from].push(candidate);
+    };
+
+    const handleRemoteEndCall = ({ from }) => {
+      if (!from) return;
+      removePeer(from);
     };
 
     socket.on("peer-joined", handlePeerJoined);
+    socket.on("peer-left", handlePeerLeft);
     socket.on("webrtc-offer", handleOffer);
     socket.on("webrtc-answer", handleAnswer);
     socket.on("webrtc-ice-candidate", handleIceCandidate);
+    socket.on("webrtc-end-call", handleRemoteEndCall);
 
     return () => {
       socket.off("peer-joined", handlePeerJoined);
+      socket.off("peer-left", handlePeerLeft);
       socket.off("webrtc-offer", handleOffer);
       socket.off("webrtc-answer", handleAnswer);
       socket.off("webrtc-ice-candidate", handleIceCandidate);
+      socket.off("webrtc-end-call", handleRemoteEndCall);
+
       Object.values(pcsRef.current).forEach((pc) => pc.close());
       pcsRef.current = {};
+      iceBufRef.current = {};
+      makingOfferRef.current = {};
+      callEndedRef.current = false;
+
       localStreamRef.current?.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
     };
-  }, [joined, socketRef, createPC, sendOffer, drainIce]);
+  }, [joined, socketRef, createPC, sendOffer, drainIce, removePeer]);
 
   const toggleMic = useCallback(async () => {
     if (micOn) {
@@ -199,9 +286,11 @@ export function useWebRTC({ socketRef, joined, usersRef }) {
     }
 
     try {
+      callEndedRef.current = false;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       const track = stream.getAudioTracks()[0];
       if (!localStreamRef.current) localStreamRef.current = new MediaStream();
+
       const existing = localStreamRef.current.getAudioTracks()[0];
       if (existing) {
         existing.stop();
@@ -212,22 +301,13 @@ export function useWebRTC({ socketRef, joined, usersRef }) {
         localStreamRef.current.addTrack(track);
         await addTrackToAll(track, localStreamRef.current);
       }
-      setMicOn(true);
-    } catch (err) {
-      console.error("[WebRTC] toggleMic error", err);
-    }
-  }, [micOn, addTrackToAll, replaceTrackInAll]);
 
-  const attachStreamToVideo = useCallback((videoEl, stream) => {
-    if (!videoEl) return;
-    if (videoEl.srcObject === stream) return;
-    videoEl.srcObject = null;
-    videoEl.load();
-    videoEl.srcObject = stream;
-    videoEl.play().catch((err) => {
-      if (err.name !== "AbortError") console.warn("[Video] play()", err);
-    });
-  }, []);
+      await connectToExistingPeers();
+      setMicOn(true);
+    } catch (error) {
+      console.error("[WebRTC] toggleMic error", error);
+    }
+  }, [micOn, addTrackToAll, replaceTrackInAll, connectToExistingPeers]);
 
   const toggleCam = useCallback(async () => {
     if (camOn) {
@@ -237,20 +317,24 @@ export function useWebRTC({ socketRef, joined, usersRef }) {
         localStreamRef.current.removeTrack(track);
         await replaceTrackInAll("video", null);
       }
+
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = null;
-        localVideoRef.current.load();
       }
+
       setCamOn(false);
       return;
     }
 
     try {
+      callEndedRef.current = false;
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       const track = stream.getVideoTracks()[0];
+
       if (!localStreamRef.current || localStreamRef.current.active === false) {
         localStreamRef.current = new MediaStream();
       }
+
       const existing = localStreamRef.current.getVideoTracks()[0];
       if (existing) {
         existing.stop();
@@ -261,27 +345,38 @@ export function useWebRTC({ socketRef, joined, usersRef }) {
         localStreamRef.current.addTrack(track);
         await addTrackToAll(track, localStreamRef.current);
       }
+
+      await connectToExistingPeers();
       attachStreamToVideo(localVideoRef.current, localStreamRef.current);
       setCamOn(true);
-    } catch (err) {
-      console.error("[WebRTC] toggleCam error", err);
+    } catch (error) {
+      console.error("[WebRTC] toggleCam error", error);
     }
-  }, [camOn, addTrackToAll, replaceTrackInAll, attachStreamToVideo]);
+  }, [camOn, addTrackToAll, replaceTrackInAll, attachStreamToVideo, connectToExistingPeers]);
 
   const endCall = useCallback(() => {
+    callEndedRef.current = true;
+    if (socketRef.current?.connected) {
+      socketRef.current.emit("webrtc-end-call");
+    }
+
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
+
     Object.values(pcsRef.current).forEach((pc) => pc.close());
     pcsRef.current = {};
+    iceBufRef.current = {};
+    makingOfferRef.current = {};
+
     setMicOn(false);
     setCamOn(false);
     setRemoteStreams({});
     setMutedPeers(new Set());
+
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = null;
-      localVideoRef.current.load();
     }
-  }, []);
+  }, [socketRef]);
 
   return {
     micOn,

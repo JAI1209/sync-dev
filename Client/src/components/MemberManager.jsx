@@ -8,6 +8,8 @@ export default function MemberManager({ roomId, userRole }) {
   const [inviteRole, setInviteRole] = useState("viewer");
   const [message, setMessage] = useState("");
   const [isOpen, setIsOpen] = useState(false);
+  const [pendingRemove, setPendingRemove] = useState(null);
+  const [pendingRoleChange, setPendingRoleChange] = useState(null);
 
   const canManage = userRole === "owner" || userRole === "admin";
   const canInvite = userRole === "owner" || userRole === "admin";
@@ -39,6 +41,15 @@ export default function MemberManager({ roomId, userRole }) {
     }
   }, [message, fetchMembers]);
 
+  useEffect(() => {
+    if (!pendingRemove && !pendingRoleChange) return undefined;
+    const timeout = setTimeout(() => {
+      setPendingRemove(null);
+      setPendingRoleChange(null);
+    }, 4000);
+    return () => clearTimeout(timeout);
+  }, [pendingRemove, pendingRoleChange]);
+
   const handleInvite = async () => {
     if (!inviteUsername.trim()) return;
     setMessage("");
@@ -63,8 +74,13 @@ export default function MemberManager({ roomId, userRole }) {
     }
   };
 
+  const requestChangeRole = (username, newRole) => {
+    // FIX: Replace native browser confirmation with an inline row-level confirmation state.
+    setPendingRoleChange({ username, newRole });
+    setMessage(`Confirm role change: ${username} -> ${newRole}`);
+  };
+
   const handleChangeRole = async (username, newRole) => {
-    if (!confirm(`Change ${username}'s role to ${newRole}?`)) return;
     try {
       const safeUsername = encodeURIComponent(username);
       const res = await authFetch(`/api/rbac/rooms/${roomId}/members/${safeUsername}/role`, {
@@ -77,6 +93,7 @@ export default function MemberManager({ roomId, userRole }) {
       const data = await res.json();
       if (res.ok) {
         setMessage(`OK: Changed ${username} to ${newRole}`);
+        setPendingRoleChange(null);
         fetchMembers();
       } else {
         setMessage(`Error: ${data.msg || "Failed to change role"}`);
@@ -87,7 +104,6 @@ export default function MemberManager({ roomId, userRole }) {
   };
 
   const handleRemove = async (username) => {
-    if (!confirm(`Remove ${username} from room?`)) return;
     try {
       const safeUsername = encodeURIComponent(username);
       const res = await authFetch(`/api/rbac/rooms/${roomId}/members/${safeUsername}`, {
@@ -96,6 +112,7 @@ export default function MemberManager({ roomId, userRole }) {
       const data = await res.json();
       if (res.ok) {
         setMessage(`OK: Removed ${username}`);
+        setPendingRemove(null);
         fetchMembers();
       } else {
         setMessage(`Error: ${data.msg || "Failed to remove"}`);
@@ -115,6 +132,12 @@ export default function MemberManager({ roomId, userRole }) {
     return badges[role] || role;
   };
 
+  const canChangeMemberRole = (member) =>
+    userRole === "owner" ||
+    (userRole === "admin" && member.role !== "owner" && member.role !== "admin");
+
+  const getAssignableRoles = () => (userRole === "owner" ? ["viewer", "editor", "admin"] : ["viewer", "editor"]);
+
   if (!isOpen) {
     return (
       <div className="sidebar-github sidebar-members">
@@ -125,7 +148,8 @@ export default function MemberManager({ roomId, userRole }) {
             className="sidebar-github__btn sidebar-github__btn--primary"
             onClick={() => setIsOpen(true)}
           >
-            Manage ({userRole})
+            Members
+            {members.length > 0 && <span className="sidebar-members__count-badge">{members.length}</span>}
           </button>
         </div>
       </div>
@@ -173,7 +197,7 @@ export default function MemberManager({ roomId, userRole }) {
           <p className="sidebar-members__empty">No members yet</p>
         ) : (
           members.map((m) => (
-            <div key={m.username} className="sidebar-members__item">
+            <div key={m.userId || m.username} className="sidebar-members__item">
               <span className="sidebar-members__name" title={m.username}>
                 {m.username}
                 {m.isOnline && <span className="sidebar-members__online" />}
@@ -184,23 +208,40 @@ export default function MemberManager({ roomId, userRole }) {
 
               {canManage && m.role !== "owner" && (
                 <div className="sidebar-members__actions">
-                  {userRole === "owner" && (
+                  {canChangeMemberRole(m) && (
                     <select
                       className="sidebar-members__role-select"
                       value={m.role}
-                      onChange={(e) => handleChangeRole(m.username, e.target.value)}
+                      onChange={(e) => requestChangeRole(m.username, e.target.value)}
                     >
-                      <option value="viewer">viewer</option>
-                      <option value="editor">editor</option>
-                      <option value="admin">admin</option>
+                      {getAssignableRoles().map((role) => (
+                        <option key={role} value={role}>{role}</option>
+                      ))}
                     </select>
                   )}
+                  {pendingRoleChange?.username === m.username && (
+                    <button
+                      type="button"
+                      className="sidebar-members__remove sidebar-members__confirm"
+                      onClick={() => handleChangeRole(m.username, pendingRoleChange.newRole)}
+                    >
+                      Confirm?
+                    </button>
+                  )}
                   <button
+                    type="button"
                     className="sidebar-members__remove"
-                    onClick={() => handleRemove(m.username)}
+                    onClick={() => {
+                      if (pendingRemove === m.username) {
+                        handleRemove(m.username);
+                        return;
+                      }
+                      // FIX: Replace native browser confirmation with a two-step inline remove confirmation.
+                      setPendingRemove(m.username);
+                    }}
                     title="Remove"
                   >
-                    x
+                    {pendingRemove === m.username ? "Confirm?" : "x"}
                   </button>
                 </div>
               )}

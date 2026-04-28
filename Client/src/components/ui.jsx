@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from 'react'
+import { useTheme } from '../context/ThemeContext.jsx'
 
 function cx(...values) {
   return values.filter(Boolean).join(' ')
@@ -138,6 +139,26 @@ export function TerminalSpinner() {
     <span className="terminal-spinner" aria-hidden="true">
       [{frames[index]}]
     </span>
+  )
+}
+
+export function ThemeToggle({ className = '' }) {
+  const { theme, toggleTheme } = useTheme()
+  const nextTheme = theme === 'dark' ? 'light' : 'dark'
+
+  return (
+    <button
+      aria-label={`Switch to ${nextTheme} mode`}
+      className={cx('theme-toggle', className)}
+      onClick={toggleTheme}
+      title={`Switch to ${nextTheme} mode`}
+      type="button"
+    >
+      <span aria-hidden="true" className="theme-toggle__track">
+        <span className="theme-toggle__thumb" />
+      </span>
+      <span className="theme-toggle__label">{theme === 'dark' ? 'Dark mode' : 'Light mode'}</span>
+    </button>
   )
 }
 

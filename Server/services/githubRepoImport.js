@@ -25,12 +25,17 @@ function uid() {
 }
 
 async function ghFetchJson(url, token) {
+  const headers = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (token) {
+    // FIX: Public repository imports must work without a stored GitHub token.
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const res = await fetch(url, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
+    headers,
   });
   const text = await res.text();
   let data;
@@ -183,6 +188,8 @@ async function importRepoFromGitHub({ owner, repo, ref, token }) {
   const meta = {
     owner,
     repo,
+    // FIX: Persist the full repo path so client hints can confirm the imported target.
+    repoPath: `${owner}/${repo}`,
     defaultBranch: repoInfo.default_branch,
     importRef: refToResolve,
     commitBranch: repoInfo.default_branch,
@@ -192,4 +199,9 @@ async function importRepoFromGitHub({ owner, repo, ref, token }) {
   return { files, folders, orderedFileIds, skipped, meta };
 }
 
-module.exports = { importRepoFromGitHub };
+module.exports = {
+  importRepoFromGitHub,
+  __testables: {
+    ghFetchJson,
+  },
+};

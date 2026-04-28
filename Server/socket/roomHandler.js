@@ -1,11 +1,56 @@
 const roomService = require("../services/roomService");
+const Room = require("../models/Room");
 const RoomMember = require("../models/RoomMember");
-const { checkSocketPermission, assignRoomOwner } = require("../middleware/rbac");
+const Snapshot = require("../models/Snapshot");
+const { checkSocketPermission, ensureRoomMembership, ROLE_HIERARCHY } = require("../middleware/rbac");
 const { extToLanguage } = require("../utils/extToLanguage");
+const AUTO_JOIN_VIEWER = String(process.env.RBAC_AUTO_JOIN_VIEWER || "true").toLowerCase() !== "false";
+
+function emitPermissionDenied(socket, roomId, permission, details = {}) {
+  socket.emit("permission-denied", {
+    roomId,
+    permission,
+    reason: details.reason || "Permission denied",
+    currentRole: details.currentRole || null,
+  });
+}
 
 async function handleJoinRoom(io, socket, { roomId }) {
-  const userId = socket.auth?.user?.id;
-  const username = socket.auth?.user?.username || "anonymous";
+  const userId = socket.userId || socket.auth?.user?.id;
+  const username = socket.username || socket.auth?.user?.username || "anonymous";
+
+  if (!roomId) {
+    socket.emit("room-join-denied", { roomId, reason: "Room ID is required" });
+    return;
+  }
+
+  if (!userId) {
+    socket.emit("room-join-denied", { roomId, reason: "Authentication required" });
+    return;
+  }
+
+  let member;
+  try {
+    member = await roomService.runWithLock(roomId, async () =>
+      ensureRoomMembership(roomId, userId, username, { autoCreateViewer: AUTO_JOIN_VIEWER })
+    );
+  } catch (err) {
+    console.error("[Join] Failed to resolve room membership:", err.message);
+    socket.emit("room-join-denied", {
+      roomId,
+      reason: "Failed to verify room membership",
+    });
+    return;
+  }
+
+  if (!member) {
+    socket.emit("room-join-denied", {
+      roomId,
+      reason: "Access denied - you are not a member of this room",
+    });
+    return;
+  }
+  const userRole = member.role;
 
   let room = await roomService.getRoom(roomId);
   if (!room) {
@@ -25,51 +70,10 @@ async function handleJoinRoom(io, socket, { roomId }) {
     console.log(`[Join] Room ${roomId} already in memory: ${Object.keys(room.files).length} files`);
   }
 
-  let userRole = "viewer";
-  if (userId) {
-    userRole = await roomService.runWithLock(roomId, async () => {
-      const member = await RoomMember.findOne({ roomId, userId });
-
-      if (member) {
-        member.lastActive = new Date();
-        await member.save();
-        return member.role;
-      }
-
-      const hasOwner = await RoomMember.findOne({ roomId, role: "owner" });
-      if (!hasOwner) {
-        try {
-          await assignRoomOwner(roomId, userId, username);
-          console.log(`[RBAC] Assigned ${username} as owner of room ${roomId}`);
-          return "owner";
-        } catch (err) {
-          console.error("[RBAC] Failed to assign owner:", err.message);
-        }
-      }
-
-      try {
-        const newMember = new RoomMember({
-          roomId,
-          userId,
-          username,
-          role: "viewer",
-        });
-        await newMember.save();
-        console.log(`[RBAC] Added ${username} as viewer to room ${roomId}`);
-      } catch (err) {
-        if (err.code !== 11000) {
-          console.error("[RBAC] Failed to add member:", err.message);
-        }
-      }
-
-      const latest = await RoomMember.findOne({ roomId, userId });
-      return latest?.role || "viewer";
-    });
-  }
-
   socket.join(roomId);
   socket.roomId = roomId;
   socket.username = username;
+  socket.userRole = userRole;
 
   roomService.clearRoomCleanup(roomId);
 
@@ -88,6 +92,8 @@ async function handleJoinRoom(io, socket, { roomId }) {
     activeFile: room.activeFile,
     role: userRole,
   });
+  // FIX: Client needs an explicit join acknowledgement to clear join timeout state.
+  socket.emit("join-ack", { roomId, role: userRole, timestamp: Date.now() });
   io.to(roomId).emit("users-update", room.users);
   socket.to(roomId).emit("peer-joined", { socketId: socket.id });
 
@@ -96,11 +102,12 @@ async function handleJoinRoom(io, socket, { roomId }) {
 
 async function handleFileChange(io, socket, { roomId, fileId, content }) {
   try {
-    console.log(`[Socket] file-change received from ${socket.username}: ${fileId} (${content.length} chars)`);
+    const nextContent = typeof content === "string" ? content : "";
+    console.log(`[Socket] file-change received from ${socket.username}: ${fileId} (${nextContent.length} chars)`);
     const perm = await checkSocketPermission(socket, roomId, "EDIT_FILES");
     if (!perm.allowed) {
       console.log(`[Socket] file-change denied for ${socket.username}: ${perm.reason}`);
-      socket.emit("error", { msg: perm.reason });
+      emitPermissionDenied(socket, roomId, "EDIT_FILES", perm);
       return;
     }
 
@@ -114,27 +121,27 @@ async function handleFileChange(io, socket, { roomId, fileId, content }) {
       return;
     }
 
-    room.files[fileId].content = content;
+    room.files[fileId].content = nextContent;
     await roomService.setRoom(roomId, room);
     console.log(`[Socket] Broadcasting file-update to room ${roomId}`);
-    socket.to(roomId).emit("file-update", { fileId, content });
+    socket.to(roomId).emit("file-update", { fileId, content: nextContent });
     roomService.persistRoom(roomId);
   } catch (err) {
     console.error("[Socket] file-change error:", err.message);
-    socket.emit("error", { msg: "Failed to save changes" });
+    socket.emit("operation-error", { msg: "Failed to save changes" });
   }
 }
 
 async function handleCreateFile(io, socket, { roomId, file }) {
   const perm = await checkSocketPermission(socket, roomId, "CREATE_FILES");
   if (!perm.allowed) {
-    socket.emit("error", { msg: perm.reason });
+    emitPermissionDenied(socket, roomId, "CREATE_FILES", perm);
     return;
   }
 
   const room = await roomService.getRoom(roomId);
   if (!room) {
-    socket.emit("error", { msg: "Room not found" });
+    socket.emit("operation-error", { msg: "Room not found" });
     return;
   }
 
@@ -158,13 +165,13 @@ async function handleCreateFile(io, socket, { roomId, file }) {
 async function handleCreateFolder(io, socket, { roomId, folder }) {
   const perm = await checkSocketPermission(socket, roomId, "CREATE_FOLDERS");
   if (!perm.allowed) {
-    socket.emit("error", { msg: perm.reason });
+    emitPermissionDenied(socket, roomId, "CREATE_FOLDERS", perm);
     return;
   }
 
   const room = await roomService.getRoom(roomId);
   if (!room) {
-    socket.emit("error", { msg: "Room not found" });
+    socket.emit("operation-error", { msg: "Room not found" });
     return;
   }
 
@@ -187,7 +194,7 @@ async function handleCreateFolder(io, socket, { roomId, folder }) {
 async function handleRenameFile(io, socket, { roomId, fileId, name }) {
   const perm = await checkSocketPermission(socket, roomId, "RENAME_ITEMS");
   if (!perm.allowed) {
-    socket.emit("error", { msg: perm.reason });
+    emitPermissionDenied(socket, roomId, "RENAME_ITEMS", perm);
     return;
   }
 
@@ -210,7 +217,7 @@ async function handleRenameFile(io, socket, { roomId, fileId, name }) {
 async function handleRenameFolder(io, socket, { roomId, folderId, name }) {
   const perm = await checkSocketPermission(socket, roomId, "RENAME_ITEMS");
   if (!perm.allowed) {
-    socket.emit("error", { msg: perm.reason });
+    emitPermissionDenied(socket, roomId, "RENAME_ITEMS", perm);
     return;
   }
 
@@ -226,7 +233,7 @@ async function handleRenameFolder(io, socket, { roomId, folderId, name }) {
 async function handleDeleteFile(io, socket, { roomId, fileId }) {
   const perm = await checkSocketPermission(socket, roomId, "DELETE_FILES");
   if (!perm.allowed) {
-    socket.emit("error", { msg: perm.reason });
+    emitPermissionDenied(socket, roomId, "DELETE_FILES", perm);
     return;
   }
 
@@ -247,7 +254,7 @@ async function handleDeleteFile(io, socket, { roomId, fileId }) {
 async function handleDeleteFolder(io, socket, { roomId, folderId }) {
   const perm = await checkSocketPermission(socket, roomId, "DELETE_FILES");
   if (!perm.allowed) {
-    socket.emit("error", { msg: perm.reason });
+    emitPermissionDenied(socket, roomId, "DELETE_FILES", perm);
     return;
   }
 
@@ -271,10 +278,18 @@ async function handleDeleteFolder(io, socket, { roomId, folderId }) {
 }
 
 async function handleSwitchFile(io, socket, { roomId, fileId }) {
+  const perm = await checkSocketPermission(socket, roomId, "VIEW_ROOM");
+  if (!perm.allowed) {
+    emitPermissionDenied(socket, roomId, "VIEW_ROOM", perm);
+    return;
+  }
+
   const room = await roomService.getRoom(roomId);
   if (!room?.files[fileId]) return;
   room.activeFile = fileId;
   await roomService.setRoom(roomId, room);
+  // FIX: Sender gets an ack so local activeFile can be reconciled with server state.
+  socket.emit("file-switched-ack", { fileId });
   socket.to(roomId).emit("file-switched", { fileId });
   roomService.persistRoom(roomId);
 }
@@ -293,6 +308,19 @@ async function handleBulkImport(io, socket, { roomId, files, folders }) {
     const room = await roomService.getRoom(roomId);
     if (!room) {
       socket.emit("import-error", { msg: "Room not found" });
+      return;
+    }
+
+    const incomingFileIds = Object.values(files || {})
+      .map((file) => file?.id)
+      .filter(Boolean);
+    if (incomingFileIds.length && incomingFileIds.every((fileId) => room.files[fileId])) {
+      // FIX: Idempotent GitHub retries should acknowledge duplicates instead of re-processing the same import.
+      socket.emit("import-complete", {
+        filesImported: 0,
+        foldersImported: 0,
+        alreadyExists: true,
+      });
       return;
     }
 
@@ -329,7 +357,8 @@ async function handleBulkImport(io, socket, { roomId, files, folders }) {
     await roomService.setRoom(roomId, room);
     await roomService.persistRoom(roomId);
 
-    io.to(roomId).emit("bulk-imported", {
+    // FIX: Sender mounts after import-complete; peers receive the persisted import via bulk-imported.
+    socket.to(roomId).emit("bulk-imported", {
       files: importedFiles,
       folders: importedFolders,
       importedBy: socket.username,
@@ -349,6 +378,148 @@ function handleRetryUpload(io, socket) {
   socket.emit("upload-retry-ack");
 }
 
+async function handleLeaveRoom(io, socket, { roomId } = {}) {
+  try {
+    const targetRoomId = roomId || socket.roomId;
+    if (!targetRoomId) return;
+
+    const room = await roomService.getRoom(targetRoomId);
+    socket.leave(targetRoomId);
+
+    if (room) {
+      room.users = room.users.filter((user) => user.id !== socket.id);
+      await roomService.setRoom(targetRoomId, room);
+      io.to(targetRoomId).emit("users-update", room.users);
+      io.to(targetRoomId).emit("user-left", { socketId: socket.id });
+      io.to(targetRoomId).emit("peer-left", { socketId: socket.id });
+      if (room.users.length === 0) {
+        roomService.persistRoom(targetRoomId);
+        roomService.scheduleRoomCleanup(targetRoomId);
+      }
+    }
+
+    socket.roomId = null;
+    socket.userRole = null;
+  } catch (err) {
+    console.error("[Room] leave-room error:", err.message);
+    socket.emit("operation-error", { msg: "Failed to leave room cleanly" });
+  }
+}
+
+async function handleTerminateRoom(io, socket, { roomId }) {
+  try {
+    const perm = await checkSocketPermission(socket, roomId, "TRANSFER_OWNERSHIP");
+    if (!perm.allowed) {
+      emitPermissionDenied(socket, roomId, "TRANSFER_OWNERSHIP", {
+        ...perm,
+        reason: "Only the room owner can terminate the room.",
+      });
+      return;
+    }
+
+    const room = (await roomService.getRoom(roomId)) || (await roomService.loadRoomFromDB(roomId));
+    if (!room) {
+      socket.emit("operation-error", { msg: "Room not found" });
+      return;
+    }
+
+    const socketsInRoom = await io.in(roomId).fetchSockets();
+    io.to(roomId).emit("room-terminated", {
+      roomId,
+      msg: "The owner has ended this room.",
+    });
+
+    await Promise.all([
+      Room.findOneAndDelete({ roomId }),
+      RoomMember.deleteMany({ roomId }),
+      Snapshot.deleteMany({ roomId }),
+    ]);
+    await roomService.destroyRoom(roomId);
+
+    setTimeout(() => {
+      socketsInRoom.forEach((participant) => {
+        participant.leave(roomId);
+        participant.roomId = null;
+        participant.disconnect(true);
+      });
+    }, 150);
+  } catch (err) {
+    console.error("[Room] terminate-room error:", err.message);
+    socket.emit("operation-error", { msg: "Failed to terminate room" });
+  }
+}
+
+async function handleChangeRole(io, socket, { roomId, username, role }) {
+  try {
+    const perm = await checkSocketPermission(socket, roomId, "MANAGE_ROLES");
+    if (!perm.allowed) {
+      emitPermissionDenied(socket, roomId, "MANAGE_ROLES", perm);
+      return;
+    }
+
+    if (!ROLE_HIERARCHY[role]) {
+      socket.emit("operation-error", { msg: "Invalid role" });
+      return;
+    }
+
+    const target = await RoomMember.findOne({ roomId, username });
+    if (!target) {
+      socket.emit("operation-error", { msg: "Member not found" });
+      return;
+    }
+
+    if (target.role === "owner") {
+      emitPermissionDenied(socket, roomId, "MANAGE_ROLES", {
+        reason: "Cannot change owner's role directly.",
+        currentRole: perm.role,
+      });
+      return;
+    }
+
+    const requesterLevel = ROLE_HIERARCHY[perm.role] || 0;
+    const currentTargetLevel = ROLE_HIERARCHY[target.role] || 0;
+    const nextTargetLevel = ROLE_HIERARCHY[role] || 0;
+
+    if (currentTargetLevel >= requesterLevel || nextTargetLevel >= requesterLevel) {
+      emitPermissionDenied(socket, roomId, "MANAGE_ROLES", {
+        reason: "Cannot change a member with equal or higher role.",
+        currentRole: perm.role,
+      });
+      return;
+    }
+
+    const oldRole = target.role;
+    target.role = role;
+    await target.save();
+
+    const room = await roomService.getRoom(roomId);
+    if (room) {
+      room.users = room.users.map((user) =>
+        user.username === username ? { ...user, role } : user
+      );
+      await roomService.setRoom(roomId, room);
+      io.to(roomId).emit("users-update", room.users);
+    }
+
+    const sockets = await io.in(roomId).fetchSockets();
+    sockets.forEach((participant) => {
+      if (String(participant.userId) !== String(target.userId)) return;
+      participant.userRole = role;
+      participant.emit("role-changed", {
+        roomId,
+        oldRole,
+        newRole: role,
+        changedBy: socket.username,
+      });
+    });
+
+    io.to(roomId).emit("members-updated", { roomId });
+  } catch (err) {
+    console.error("[Room] change-role error:", err.message);
+    socket.emit("operation-error", { msg: "Failed to change role" });
+  }
+}
+
 function handleWebrtcOffer(io, socket, { to, offer }) {
   io.to(to).emit("webrtc-offer", { from: socket.id, offer });
 }
@@ -359,6 +530,11 @@ function handleWebrtcAnswer(io, socket, { to, answer }) {
 
 function handleWebrtcIceCandidate(io, socket, { to, candidate }) {
   io.to(to).emit("webrtc-ice-candidate", { from: socket.id, candidate });
+}
+
+function handleWebrtcEndCall(io, socket) {
+  if (!socket.roomId) return;
+  socket.to(socket.roomId).emit("webrtc-end-call", { from: socket.id });
 }
 
 async function handleDisconnect(io, socket) {
@@ -394,11 +570,22 @@ function registerRoomHandlers(io, socket) {
   socket.on("delete-folder", (data) => handleDeleteFolder(io, socket, data));
   socket.on("switch-file", (data) => handleSwitchFile(io, socket, data));
   socket.on("bulk-import", (data) => handleBulkImport(io, socket, data));
+  socket.on("leave-room", (data) => handleLeaveRoom(io, socket, data));
+  socket.on("terminate-room", (data) => handleTerminateRoom(io, socket, data));
+  socket.on("change-role", (data) => handleChangeRole(io, socket, data));
   socket.on("retry-upload", () => handleRetryUpload(io, socket));
   socket.on("webrtc-offer", (data) => handleWebrtcOffer(io, socket, data));
   socket.on("webrtc-answer", (data) => handleWebrtcAnswer(io, socket, data));
   socket.on("webrtc-ice-candidate", (data) => handleWebrtcIceCandidate(io, socket, data));
+  socket.on("webrtc-end-call", () => handleWebrtcEndCall(io, socket));
   socket.on("disconnect", () => handleDisconnect(io, socket));
 }
 
-module.exports = { registerRoomHandlers };
+module.exports = {
+  registerRoomHandlers,
+  __testables: {
+    handleFileChange,
+    handleBulkImport,
+    handleSwitchFile,
+  },
+};

@@ -6,7 +6,12 @@ export function buildRepoPath(file, files, folders) {
   }
   const parts = [];
   let parent = file.parentId;
-  while (parent) {
+  let depth = 0;
+  const visited = new Set();
+  // FIX: Guard repo path construction against circular parent references in corrupted folder data.
+  while (parent && depth < 50 && !visited.has(parent)) {
+    visited.add(parent);
+    depth += 1;
     const folder = folders[parent];
     if (!folder) break;
     parts.unshift(folder.name);

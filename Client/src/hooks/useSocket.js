@@ -1,21 +1,25 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io } from "socket.io-client";
+import { jwtDecode } from "jwt-decode";
 import { refreshAccessToken } from "../api/auth";
 import { clearAuthTokens, getAccessToken } from "../api/client";
 
 const SERVER_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
+const TOKEN_REFRESH_SKEW_MS = 30 * 1000;
 
-export function useSocket({
-  roomId,
-  navigate,
-  fs,
-  monaco,
-  setEditorKey,
-}) {
+function tokenNeedsRefresh(token) {
+  try {
+    const decoded = jwtDecode(token);
+    return !decoded?.exp || decoded.exp * 1000 <= Date.now() + TOKEN_REFRESH_SKEW_MS;
+  } catch {
+    return true;
+  }
+}
+
+export function useSocket({ roomId, navigate, fs, setEditorKey, setEditorNotification }) {
   const {
-    files,
-    folders,
     loadRoomState,
+    setActiveFile,
     applyFileCreated,
     applyFolderCreated,
     applyFileRenamed,
@@ -26,16 +30,11 @@ export function useSocket({
   } = fs;
 
   const socketRef = useRef(null);
-  const filesRef = useRef(files);
-  const foldersRef = useRef(folders);
   const debounceTimer = useRef(null);
   const pendingRemoteUpdates = useRef(new Set());
   const importRetryCount = useRef(0);
   const attemptedSocketRefreshRef = useRef(false);
-
-  // keep refs in sync
-  useEffect(() => { filesRef.current = files; }, [files]);
-  useEffect(() => { foldersRef.current = folders; }, [folders]);
+  const joinTimeoutRef = useRef(null);
 
   const [joined, setJoined] = useState(false);
   const [userRole, setUserRole] = useState("viewer");
@@ -55,23 +54,51 @@ export function useSocket({
     setLastConnectedAt(Date.now());
   }, []);
 
-  // ── Socket setup ───────────────────────────────────────────────────────────
+  const getFreshSocketToken = useCallback(async (forceRefresh = false) => {
+    // FIX: Always refresh token before connecting to avoid stale JWT rejections.
+    let token = getAccessToken();
+    if (forceRefresh || !token || tokenNeedsRefresh(token)) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        clearAuthTokens();
+        navigate("/login");
+        return null;
+      }
+      token = getAccessToken();
+    }
+    return token;
+  }, [navigate]);
+
   useEffect(() => {
     let socket;
     let isActive = true;
+    const clearJoinTimeout = () => {
+      if (joinTimeoutRef.current) {
+        clearTimeout(joinTimeoutRef.current);
+        joinTimeoutRef.current = null;
+      }
+    };
+
+    const startJoinTimeout = () => {
+      clearJoinTimeout();
+      // FIX: Surface silent join failures instead of leaving the editor loading forever.
+      joinTimeoutRef.current = setTimeout(() => {
+        if (!isActive) return;
+        setSocketStatus("error");
+        setSocketIssue("Room join timed out — check your connection");
+        setJoined(false);
+      }, 10000);
+    };
+
+    const emitJoinRoom = () => {
+      socket.emit("join-room", { roomId });
+      startJoinTimeout();
+    };
 
     const initSocket = async () => {
-      let token = getAccessToken();
+      let token = await getFreshSocketToken();
       if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          if (isActive) {
-            clearAuthTokens();
-            navigate("/login");
-          }
-          return;
-        }
-        token = getAccessToken();
+        return;
       }
 
       if (!isActive) return;
@@ -89,6 +116,7 @@ export function useSocket({
       setLastConnectedAt(new Date());
       setReconnecting(false);
 
+      socket.auth = { token };
       socket.connect();
 
       socket.on("connect", () => {
@@ -97,17 +125,33 @@ export function useSocket({
         setSocketIssue("");
         setLastConnectedAt(new Date());
         setReconnecting(false);
-        socket.emit("join-room", { roomId });
+        emitJoinRoom();
         socket.emit("retry-upload");
+
+        // Retry folder upload that may have happened while offline.
+        try {
+          const raw = sessionStorage.getItem("syncdev_pending_upload");
+          if (!raw) return;
+          const pending = JSON.parse(raw);
+          if (!pending || pending.roomId !== roomId) return;
+
+          socket.emit("bulk-import", {
+            roomId,
+            files: pending.files || {},
+            folders: pending.folders || {},
+          });
+          sessionStorage.removeItem("syncdev_pending_upload");
+        } catch {
+          sessionStorage.removeItem("syncdev_pending_upload");
+        }
       });
 
       socket.on("disconnect", (reason) => {
+        clearJoinTimeout();
         setSocketStatus("disconnected");
         setSocketIssue(`Disconnected (${reason})`);
-        // Don't set joined=false on temporary disconnects.
-        // reconnect will emit join-room and re-sync state.
         if (reason === "io server disconnect") {
-          setJoined(false); // only hard-reset on server-forced disconnect
+          setJoined(false);
         }
       });
 
@@ -121,124 +165,221 @@ export function useSocket({
           err.message?.includes("Invalid or expired token") ||
           err.message?.includes("Authentication required");
 
-        if (tokenError) {
-          if (attemptedSocketRefreshRef.current) {
-            setReconnecting(false);
-            clearAuthTokens();
-            navigate("/login");
-            return;
-          }
+        if (!tokenError) {
+          return;
+        }
 
-          attemptedSocketRefreshRef.current = true;
-          setReconnecting(true);
-          const refreshed = await refreshAccessToken();
-          if (!refreshed) {
-            setReconnecting(false);
-            clearAuthTokens();
-            navigate("/login");
-            return;
-          }
+        if (attemptedSocketRefreshRef.current) {
+          setReconnecting(false);
+          clearAuthTokens();
+          navigate("/login");
+          return;
+        }
 
-          socket.auth.token = refreshed;
-          socket.connect();
+        attemptedSocketRefreshRef.current = true;
+        setReconnecting(true);
+        // FIX: A server JWT rejection means the current socket token is invalid even if local decoding looks fresh.
+        const freshToken = await getFreshSocketToken(true);
+        if (!freshToken) {
+          setReconnecting(false);
+          return;
+        }
+
+        socket.auth = { token: freshToken };
+        socket.connect();
+      });
+
+      socket.io.on("reconnect_attempt", async () => {
+        setReconnecting(true);
+        setSocketStatus("connecting");
+        // FIX: Refresh the token on every reconnect attempt instead of reusing a stale in-memory JWT.
+        const freshToken = await getFreshSocketToken(true);
+        if (freshToken) {
+          socket.auth = { token: freshToken };
         }
       });
 
-      // Room state on join
+      socket.io.on("reconnect", () => {
+        setReconnecting(false);
+      });
+
       socket.on("room-state", (state) => {
-        // Bug 2 Fix: Server state wins over stale local (reversed spread order)
-        const mergedFiles = { ...filesRef.current, ...state.files };
-        const mergedFolders = { ...foldersRef.current, ...state.folders };
+        clearJoinTimeout();
+        const normalizedFiles = state?.files && typeof state.files === "object" ? state.files : {};
+        const normalizedFolders = state?.folders && typeof state.folders === "object" ? state.folders : {};
+        const activeFile = typeof state?.activeFile === "string" ? state.activeFile : null;
 
-        const newFiles = Object.keys(state.files).filter((id) => !filesRef.current[id]).length;
-        const newFolders = Object.keys(state.folders).filter((id) => !foldersRef.current[id]).length;
+        // FIX: Pending GitHub imports stay hidden until import-complete confirms server persistence.
+        // Always trust canonical room state from server on join/reconnect.
+        loadRoomState({
+          files: normalizedFiles,
+          folders: normalizedFolders,
+          activeFile,
+        });
 
-        if (newFiles > 0 || newFolders > 0) {
-          console.log(`[RoomState] Adding ${newFiles} new files, ${newFolders} new folders from server`);
+        setJoined(true);
+        // FIX: Snapshot restore broadcasts room-state without role; preserve current RBAC role in that case.
+        if (state?.role) {
+          setUserRole(state.role);
         }
 
-        loadRoomState({ ...state, files: mergedFiles, folders: mergedFolders });
-        setJoined(true);
-        setUserRole(state.role || "viewer");
-        
-        // Force Monaco to remount with new files (prevents empty editor on reload)
-        if (Object.keys(mergedFiles).length > 0) {
+        if (Object.keys(normalizedFiles).length > 0) {
           setTimeout(() => setEditorKey?.((k) => k + 1), 50);
         }
       });
 
-      // Real-time role change from admin
-      socket.on("role-changed", ({ roomId: changedRoomId, oldRole, newRole, changedBy }) => {
-        if (changedRoomId === roomId) {
-          console.log(`[Role] Changed from ${oldRole} to ${newRole} by ${changedBy}`);
-          setUserRole(newRole);
-          setEditorKey?.((k) => k + 1);
-          setSocketIssue(`Role updated: ${oldRole} → ${newRole}`);
-          setTimeout(() => setSocketIssue(""), 3000);
-        }
+      socket.on("join-ack", ({ roomId: ackRoomId }) => {
+        if (ackRoomId !== roomId) return;
+        clearJoinTimeout();
       });
 
-      socket.on("users-update", (u) => setUsers(u));
+      socket.on("role-changed", ({ roomId: changedRoomId, oldRole, newRole, changedBy }) => {
+        if (changedRoomId !== roomId) return;
+        console.log(`[Role] Changed from ${oldRole} to ${newRole} by ${changedBy}`);
+        setUserRole(newRole);
+        setEditorKey?.((k) => k + 1);
+        // FIX: Role changes must be visible in the editor, not only in socket status text.
+        setEditorNotification?.(`Your role was changed to: ${newRole}`);
+        setSocketIssue(`Role updated: ${oldRole} -> ${newRole}`);
+        setTimeout(() => {
+          setSocketIssue("");
+          setEditorNotification?.(null);
+        }, 3000);
+      });
+
+      socket.on("permission-denied", ({ roomId: deniedRoomId, reason, permission, currentRole }) => {
+        if (deniedRoomId && deniedRoomId !== roomId) return;
+        const fallback = permission ? `Permission denied (${permission})` : "Permission denied";
+        const withRole = currentRole ? `${reason || fallback} [role: ${currentRole}]` : (reason || fallback);
+        // FIX: Show user-visible feedback when RBAC denies a socket action.
+        setEditorNotification?.(`Action blocked: ${reason || permission || "permission denied"}`);
+        setSocketIssue(withRole);
+        setTimeout(() => {
+          setSocketIssue("");
+          setEditorNotification?.(null);
+        }, 3000);
+      });
+
+      socket.on("operation-error", ({ msg }) => {
+        if (!msg) return;
+        setSocketIssue(msg);
+        setTimeout(() => setSocketIssue(""), 3000);
+      });
+
+      socket.on("room-join-denied", ({ roomId: deniedRoomId, reason }) => {
+        if (deniedRoomId && deniedRoomId !== roomId) return;
+        clearJoinTimeout();
+        setJoined(false);
+        setSocketStatus("error");
+        setSocketIssue(reason || "Unable to join room");
+      });
+
+      socket.on("removed-from-room", ({ roomId: removedRoomId, removedBy }) => {
+        if (removedRoomId && removedRoomId !== roomId) return;
+        // FIX: Removed members are redirected immediately so stale sockets cannot keep editing.
+        setEditorNotification?.(`Removed from room by ${removedBy || "owner"}`);
+        setJoined(false);
+        setUsers([]);
+        loadRoomState({ files: {}, folders: {}, activeFile: null });
+        setSocketStatus("error");
+        setSocketIssue(`Removed from room by ${removedBy || "owner"}`);
+        socket.disconnect();
+        setTimeout(() => navigate("/dashboard"), 600);
+      });
+
+      socket.on("room-terminated", ({ msg, roomId: terminatedRoomId }) => {
+        if (terminatedRoomId && terminatedRoomId !== roomId) return;
+        // FIX: Tear down local room state before redirecting so terminated rooms do not leave stale files mounted.
+        setEditorNotification?.(msg || "This room has been terminated.");
+        setJoined(false);
+        setUsers([]);
+        loadRoomState({ files: {}, folders: {}, activeFile: null });
+        setSocketStatus("error");
+        setSocketIssue(msg || "This room has been terminated.");
+        socket.disconnect();
+        setTimeout(() => navigate("/dashboard"), 1500);
+      });
+
+      socket.on("users-update", (nextUsers) => {
+        setUsers(Array.isArray(nextUsers) ? nextUsers : []);
+      });
 
       socket.on("file-update", ({ fileId, content }) => {
-        console.log("[Socket] Received file-update:", fileId, content.length, "chars");
+        if (!fileId) return;
+        const nextContent = typeof content === "string" ? content : "";
+
         if (debounceTimer.current) {
           clearTimeout(debounceTimer.current);
           debounceTimer.current = null;
         }
+
         pendingRemoteUpdates.current.add(fileId);
-        applyFileUpdated({ fileId, content });
-        // Set will be checked in onDidChangeModelContent to skip emit
+        applyFileUpdated({ fileId, content: nextContent });
         setTimeout(() => pendingRemoteUpdates.current.delete(fileId), 100);
       });
 
-      socket.on("file-created", (file) => {
-        applyFileCreated(file);
-        // Model created by useMonacoModels effect
-      });
-
+      socket.on("file-created", (file) => applyFileCreated(file));
       socket.on("folder-created", (folder) => applyFolderCreated(folder));
 
       socket.on("bulk-imported", ({ files: importedFiles, folders: importedFolders }) => {
-        const fileArray = Array.isArray(importedFiles) ? importedFiles : Object.values(importedFiles || {});
-        const folderArray = Array.isArray(importedFolders) ? importedFolders : Object.values(importedFolders || {});
+        const fileArray = Array.isArray(importedFiles)
+          ? importedFiles
+          : Object.values(importedFiles || {});
+        const folderArray = Array.isArray(importedFolders)
+          ? importedFolders
+          : Object.values(importedFolders || {});
 
-        console.log(`[Import] bulk-imported received: ${fileArray.length} files, ${folderArray.length} folders`);
-
-        // Add folders first (so parent folders exist before child files)
         folderArray.forEach((folder) => applyFolderCreated(folder));
         fileArray.forEach((file) => applyFileCreated(file));
 
-        // For members who weren't the importer, open the first file so the
-        // editor isn't left blank after an import.
-        if (fileArray.length > 0 && !filesRef.current[fileArray[0].id]) {
-          // Delay slightly so state has settled
+        if (fileArray.length > 0) {
           setTimeout(() => setEditorKey?.((k) => k + 1), 100);
         }
       });
 
-      socket.on("file-renamed", (payload) => {
-        applyFileRenamed(payload);
-        // Model language updated by useMonacoModels
-      });
-
+      socket.on("file-renamed", applyFileRenamed);
       socket.on("folder-renamed", applyFolderRenamed);
-
-      // Bug 6 Fix: file-deleted/folder-deleted moved to main initSocket (was in separate useEffect with stale guard)
       socket.on("file-deleted", ({ fileId }) => applyFileDeleted({ fileId }));
       socket.on("folder-deleted", (payload) => applyFolderDeleted(payload));
+      socket.on("file-switched", ({ fileId }) => {
+        if (!fileId) return;
+        setActiveFile?.(fileId);
+      });
+      socket.on("file-switched-ack", ({ fileId }) => {
+        if (!fileId) return;
+        // FIX: Reconcile sender active file with server-confirmed switch state.
+        setActiveFile?.(fileId);
+      });
     };
 
     initSocket();
 
     return () => {
       isActive = false;
+      clearJoinTimeout();
       if (socket) {
+        // FIX: Remove listeners before disconnect so StrictMode double-mount does not duplicate events.
         socket.removeAllListeners();
+        socket.io.removeAllListeners();
         socket.disconnect();
       }
     };
-  }, [roomId, navigate, loadRoomState, applyFileCreated, applyFolderCreated, applyFileRenamed, applyFolderRenamed, applyFileDeleted, applyFolderDeleted, applyFileUpdated, monaco, setEditorKey]);
+  }, [
+    roomId,
+    navigate,
+    getFreshSocketToken,
+    loadRoomState,
+    applyFileCreated,
+    applyFolderCreated,
+    applyFileRenamed,
+    applyFolderRenamed,
+    applyFileDeleted,
+    applyFolderDeleted,
+    applyFileUpdated,
+    setActiveFile,
+    setEditorKey,
+    setEditorNotification,
+  ]);
 
   const handleReconnectSocket = useCallback(async () => {
     const socket = socketRef.current;
@@ -248,20 +389,15 @@ export function useSocket({
     setReconnecting(true);
     setSocketStatus("connecting");
 
-    const token = getAccessToken();
+    const token = await getFreshSocketToken(true);
     if (!token) {
-      const refreshed = await refreshAccessToken();
-      if (!refreshed) {
-        setReconnecting(false);
-        clearAuthTokens();
-        navigate("/login");
-        return;
-      }
+      setReconnecting(false);
+      return;
     }
 
-    socket.auth = { token: getAccessToken() };
+    socket.auth = { token };
     socket.connect();
-  }, [navigate]);
+  }, [getFreshSocketToken]);
 
   return {
     socketRef,

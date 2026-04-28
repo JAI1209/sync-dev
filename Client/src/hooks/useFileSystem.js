@@ -70,6 +70,7 @@ export function useFileSystem() {
   const updateFileContent = useCallback((fileId, content) => {
     setFiles((prev) => {
       if (!prev[fileId]) return prev;
+      if (prev[fileId].content === content) return prev;
       return { ...prev, [fileId]: { ...prev[fileId], content } };
     });
   }, []);
