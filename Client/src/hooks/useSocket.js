@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io } from "socket.io-client";
 import { jwtDecode } from "jwt-decode";
-import { refreshAccessToken } from "../api/auth";
-import { clearAuthTokens, getAccessToken } from "../api/client";
+import { clearAuthTokens, getAccessToken, refreshAccessToken } from "../api/client";
 
 const SERVER_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 const TOKEN_REFRESH_SKEW_MS = 30 * 1000;
@@ -60,6 +59,11 @@ export function useSocket({ roomId, navigate, fs, setEditorKey, setEditorNotific
     if (forceRefresh || !token || tokenNeedsRefresh(token)) {
       const refreshed = await refreshAccessToken();
       if (!refreshed) {
+        const hasPendingImport = Boolean(sessionStorage.getItem("syncdev_pending_import"));
+        if (hasPendingImport) {
+          setSocketIssue("Session expired. Refresh the page to reconnect and retry the import.");
+          return null;
+        }
         clearAuthTokens();
         navigate("/login");
         return null;
@@ -171,6 +175,11 @@ export function useSocket({ roomId, navigate, fs, setEditorKey, setEditorNotific
 
         if (attemptedSocketRefreshRef.current) {
           setReconnecting(false);
+          const hasPendingImport = Boolean(sessionStorage.getItem("syncdev_pending_import"));
+          if (hasPendingImport) {
+            setSocketIssue("Session expired. Refresh the page to reconnect and retry the import.");
+            return;
+          }
           clearAuthTokens();
           navigate("/login");
           return;

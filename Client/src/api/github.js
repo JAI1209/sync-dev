@@ -8,6 +8,9 @@ export async function importGitHubRepo(owner, repo, ref) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    if (res._sessionExpired) {
+      throw new Error("Session expired (401).");
+    }
     const msg = data.msg || data.message || `Import failed (${res.status})`;
     throw new Error(msg);
   }
