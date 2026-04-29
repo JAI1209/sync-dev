@@ -46,8 +46,12 @@ async function requestRefreshToken() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refreshToken }),
     });
+    // FIX: Only clear tokens on definitive auth rejection. Transient server errors (500, 503)
+    // should not wipe credentials — the user should be able to retry.
     if (!res.ok) {
-      clearAuthTokens();
+      if (res.status === 401 || res.status === 403) {
+        clearAuthTokens();
+      }
       return null;
     }
 
@@ -86,7 +90,14 @@ export async function authFetch(path, options = {}) {
   if (res.status !== 401 || !retryOnUnauthorized) return res;
 
   const refreshedToken = await refreshAccessToken();
-  if (!refreshedToken) return res;
+  // FIX: Surface session expiry explicitly so callers can show a useful message
+  // instead of a confusing "Import failed (401)".
+  if (!refreshedToken) {
+    if (res) {
+      res._sessionExpired = true;
+    }
+    return res;
+  }
 
   const retryHeaders = {
     ...headers,

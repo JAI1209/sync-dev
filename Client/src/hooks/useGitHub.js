@@ -295,7 +295,19 @@ export function useGitHub({ files, folders, roomId, socketRef, joined, loadFiles
       setRetryTick((tick) => tick + 1);
     } catch (error) {
       setImportProgress(null);
-      setGithubHint("Import failed: " + error.message);
+      // FIX: Distinguish session expiry from GitHub-specific errors.
+      const msg = String(error?.message || "");
+      if (msg.startsWith("GitHub auth error:") || msg.includes("GitHub access denied")) {
+        setGithubHint(msg);
+      } else if (
+        msg.includes("401") ||
+        msg.toLowerCase().includes("session expired") ||
+        (msg.toLowerCase().includes("sign in") && !msg.toLowerCase().includes("github"))
+      ) {
+        setGithubHint("Session expired — refresh the page to reconnect.");
+      } else {
+        setGithubHint("Import failed: " + msg);
+      }
     }
   }, [roomId]);
 
