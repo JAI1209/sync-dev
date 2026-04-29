@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io } from "socket.io-client";
 import { jwtDecode } from "jwt-decode";
-import { refreshAccessToken } from "../api/auth";
-import { clearAuthTokens, getAccessToken } from "../api/client";
+import { clearAuthTokens, getAccessToken, refreshAccessToken } from "../api/client";
 
 const SERVER_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 const TOKEN_REFRESH_SKEW_MS = 30 * 1000;
