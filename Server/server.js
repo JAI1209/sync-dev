@@ -51,7 +51,7 @@ app.use(express.json({ limit: "32mb" }));
 // Rate limiting for auth routes (stricter)
 app.use("/api/auth/login", rateLimitMiddleware("login"));
 app.use("/api/auth/register", rateLimitMiddleware("register"));
-app.use("/api/auth/forgot-password", rateLimitMiddleware("forgotPassword"));
+app.use("/api/auth/forgot", rateLimitMiddleware("forgotPassword"));
 
 // General API rate limiting
 app.use("/api", rateLimitMiddleware("api"));
@@ -105,5 +105,4 @@ process.on("SIGINT", async () => {
   await disconnectRedis();
   process.exit(0);
 });
-
 

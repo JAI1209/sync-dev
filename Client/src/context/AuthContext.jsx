@@ -1,5 +1,6 @@
 import { createContext, useContext, useState } from 'react'
 import { jwtDecode } from 'jwt-decode'
+import { clearAuthTokens } from "../api/client";
 
 const AuthContext = createContext(null)
 
@@ -28,7 +29,7 @@ export function AuthProvider({ children }) {
     const isAuthenticated = Boolean(token)
 
     const handleLogout = () => {
-        localStorage.removeItem('refreshToken');
+        clearAuthTokens();
         setToken('');
     };
 

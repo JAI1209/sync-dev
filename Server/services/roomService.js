@@ -124,6 +124,10 @@ function makeDefaultRoom() {
 async function persistRoom(roomId) {
   const room = rooms[roomId];
   if (!room) return;
+  if (typeof room.files?.forEach === "function" && !(room.files instanceof Map)) {
+    console.error("[Persist] room.files is a Mongoose document, not a plain object. Skipping persist.");
+    return;
+  }
 
   try {
     await Room.findOneAndUpdate(
@@ -143,6 +147,34 @@ async function persistRoom(roomId) {
 }
 
 async function loadRoomFromDB(roomId) {
+  const KNOWN_FILE_FIELDS = ["id", "name", "content", "language", "parentId", "readOnly"];
+  const normalizeEntry = (val, knownFields) => {
+    const raw = typeof val?.toObject === "function" ? val.toObject() : (val || {});
+    const clean = {};
+    knownFields.forEach((field) => {
+      if (raw[field] !== undefined) clean[field] = raw[field];
+    });
+    if (clean.content == null) clean.content = "";
+    return clean;
+  };
+  const deserializeMapField = (field, knownFields) => {
+    const result = {};
+    if (!field) return result;
+    if (typeof field.forEach === "function") {
+      field.forEach((val, key) => {
+        try {
+          result[key] = normalizeEntry(val, knownFields);
+        } catch {
+          result[key] = normalizeEntry({}, knownFields);
+        }
+      });
+    } else if (typeof field === "object") {
+      Object.entries(field).forEach(([key, val]) => {
+        result[key] = normalizeEntry(val, knownFields);
+      });
+    }
+    return result;
+  };
   try {
     const doc = await Room.findOne({ roomId });
     if (!doc) {
@@ -152,20 +184,17 @@ async function loadRoomFromDB(roomId) {
 
     console.log(`[DB] Found room ${roomId}, files type:`, typeof doc.files, doc.files?.constructor?.name);
 
-    const files = {};
-    if (doc.files && typeof doc.files.forEach === "function") {
-      doc.files.forEach((val, key) => {
-        files[key] = val.toObject();
-      });
-    } else {
-      console.log(`[DB] doc.files is not a Map, it's:`, doc.files);
-    }
-
-    const folders = {};
-    if (doc.folders && typeof doc.folders.forEach === "function") {
-      doc.folders.forEach((val, key) => {
-        folders[key] = val.toObject();
-      });
+    const files = deserializeMapField(doc.files, KNOWN_FILE_FIELDS);
+    const folders = deserializeMapField(doc.folders, ["id", "name", "parentId"]);
+    const required = ["id", "name"];
+    Object.entries(files).forEach(([key, file]) => {
+      if (!required.every((f) => file[f])) {
+        console.warn(`[DB] Dropping malformed file entry key="${key}"`, file);
+        delete files[key];
+      }
+    });
+    if (Object.keys(files).length === 0 && doc.files && (doc.files.size > 0 || Object.keys(doc.files || {}).length > 0)) {
+      console.error("[DB] Deserialization produced 0 files despite non-empty doc.files. Raw:", doc.files);
     }
 
     console.log(`[DB] Loaded files:`, Object.keys(files).length, Object.keys(files));

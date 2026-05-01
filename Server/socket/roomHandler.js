@@ -77,8 +77,9 @@ async function handleJoinRoom(io, socket, { roomId }) {
 
   roomService.clearRoomCleanup(roomId);
 
-  room.users = room.users.filter((u) => u.id !== socket.id);
-  room.users.push({ id: socket.id, username, role: userRole });
+  const stableUserId = String(socket.userId || socket.id);
+  room.users = room.users.filter((u) => u.userId !== stableUserId && u.socketId !== socket.id);
+  room.users.push({ socketId: socket.id, userId: stableUserId, username, role: userRole });
 
   const roomFiles = room.files;
   const roomFolders = room.folders;
@@ -130,6 +131,15 @@ async function handleFileChange(io, socket, { roomId, fileId, content }) {
     console.error("[Socket] file-change error:", err.message);
     socket.emit("operation-error", { msg: "Failed to save changes" });
   }
+}
+
+async function handleYjsUpdate(io, socket, { roomId, fileId, update }) {
+  const perm = await checkSocketPermission(socket, roomId, "EDIT_FILES");
+  if (!perm.allowed) {
+    emitPermissionDenied(socket, roomId, "EDIT_FILES", perm);
+    return;
+  }
+  socket.to(roomId).emit("yjs-update", { fileId, update });
 }
 
 async function handleCreateFile(io, socket, { roomId, file }) {
@@ -387,7 +397,7 @@ async function handleLeaveRoom(io, socket, { roomId } = {}) {
     socket.leave(targetRoomId);
 
     if (room) {
-      room.users = room.users.filter((user) => user.id !== socket.id);
+      room.users = room.users.filter((user) => user.socketId !== socket.id);
       await roomService.setRoom(targetRoomId, room);
       io.to(targetRoomId).emit("users-update", room.users);
       io.to(targetRoomId).emit("user-left", { socketId: socket.id });
@@ -495,7 +505,7 @@ async function handleChangeRole(io, socket, { roomId, username, role }) {
     const room = await roomService.getRoom(roomId);
     if (room) {
       room.users = room.users.map((user) =>
-        user.username === username ? { ...user, role } : user
+        String(user.userId) === String(target.userId) ? { ...user, role } : user
       );
       await roomService.setRoom(roomId, room);
       io.to(roomId).emit("users-update", room.users);
@@ -541,7 +551,7 @@ async function handleDisconnect(io, socket) {
   const { roomId } = socket;
   const room = roomId && (await roomService.getRoom(roomId));
   if (room) {
-    room.users = room.users.filter((u) => u.id !== socket.id);
+    room.users = room.users.filter((u) => u.socketId !== socket.id);
     io.to(roomId).emit("users-update", room.users);
     socket.to(roomId).emit("peer-left", { socketId: socket.id });
     if (room.users.length === 0) {
@@ -562,6 +572,7 @@ function registerRoomHandlers(io, socket) {
 
   socket.on("join-room", (data) => handleJoinRoom(io, socket, data));
   socket.on("file-change", (data) => handleFileChange(io, socket, data));
+  socket.on("yjs-update", (data) => handleYjsUpdate(io, socket, data));
   socket.on("create-file", (data) => handleCreateFile(io, socket, data));
   socket.on("create-folder", (data) => handleCreateFolder(io, socket, data));
   socket.on("rename-file", (data) => handleRenameFile(io, socket, data));
