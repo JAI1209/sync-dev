@@ -328,13 +328,29 @@ export default function Editor({ username }) {
       loadFiles(newFiles, newFolders, Object.keys(newFiles)[0] || null);
 
       const socket = socketRef.current;
-      const pendingData = { roomId, files: newFiles, folders: newFolders };
-
       if (socket?.connected) {
         sessionStorage.removeItem("syncdev_pending_upload");
-        socket.emit("bulk-import", pendingData);
+        const CHUNK_SIZE = 100;
+        const fileEntries = Object.entries(newFiles);
+        const totalChunks = Math.ceil(fileEntries.length / CHUNK_SIZE);
+
+        if (totalChunks <= 1) {
+          socket.emit("bulk-import", { roomId, files: newFiles, folders: newFolders });
+        } else {
+          for (let i = 0; i < totalChunks; i++) {
+            const chunkFiles = Object.fromEntries(fileEntries.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE));
+            socket.emit("bulk-import", {
+              roomId,
+              files: chunkFiles,
+              folders: i === 0 ? newFolders : {},
+            });
+            if (i < totalChunks - 1) {
+              await new Promise((r) => setTimeout(r, 100));
+            }
+          }
+        }
       } else {
-        sessionStorage.setItem("syncdev_pending_upload", JSON.stringify(pendingData));
+        sessionStorage.setItem("syncdev_pending_upload", JSON.stringify({ roomId, files: newFiles, folders: newFolders }));
       }
     } catch (error) {
       setEditorNotification("Upload failed: " + error.message);
@@ -359,11 +375,8 @@ export default function Editor({ username }) {
 
   const getRunCode = useCallback(() => {
     const file = activeFile;
-    if (!file) return "// No active file";
-    if (file.language === "javascript" || file.language === "typescript") {
-      return file.content || "";
-    }
-    return "// Select a JS/TS file to run";
+    if (!file) return "";
+    return file.content || "";
   }, [activeFile]);
 
   return (

@@ -200,8 +200,12 @@ export default function RunTerminal({ getCode, language, fileName, activeFileId,
     }
 
     const code = getCode();
-    if (!code.trim()) {
-      setLines([{ type: "error", text: "Nothing to run." }]);
+    if (!code || !code.trim()) {
+      if (isHtml) {
+        setLines([{ type: "error", text: "HTML file is empty or not loaded yet. Try again in a moment." }]);
+      } else {
+        setLines([{ type: "error", text: "Nothing to run." }]);
+      }
       return;
     }
 

@@ -155,10 +155,26 @@ export function useGitHub({ files, folders, roomId, socketRef, joined, loadFiles
 
                 sock.once("import-complete", onImportComplete);
                 sock.once("import-error", onImportError);
-                sock.emit("bulk-import", { roomId, files: newFiles, folders: newFolders || {} });
+                const CHUNK_SIZE = 100;
+                const fileEntries = Object.entries(newFiles);
+                const totalChunks = Math.ceil(fileEntries.length / CHUNK_SIZE);
+                if (totalChunks <= 1) {
+                  sock.emit("bulk-import", { roomId, files: newFiles, folders: newFolders || {} });
+                } else {
+                  const firstChunk = Object.fromEntries(fileEntries.slice(0, CHUNK_SIZE));
+                  sock.emit("bulk-import", { roomId, files: firstChunk, folders: newFolders || {} });
+                  for (let i = 1; i < totalChunks; i++) {
+                    const chunkFiles = Object.fromEntries(fileEntries.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE));
+                    setTimeout(() => {
+                      if (sock.connected) {
+                        sock.emit("bulk-import", { roomId, files: chunkFiles, folders: {} });
+                      }
+                    }, i * 150);
+                  }
+                }
                 confirmationTimer = setTimeout(
                   () => onImportError({ msg: "Import confirmation timed out." }),
-                  10000
+                  30000
                 );
               }
             }

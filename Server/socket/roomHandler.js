@@ -324,8 +324,8 @@ async function handleBulkImport(io, socket, { roomId, files, folders }) {
     const incomingFileIds = Object.values(files || {})
       .map((file) => file?.id)
       .filter(Boolean);
-    if (incomingFileIds.length && incomingFileIds.every((fileId) => room.files[fileId])) {
-      // FIX: Idempotent GitHub retries should acknowledge duplicates instead of re-processing the same import.
+    const alreadyExistingCount = incomingFileIds.filter((fileId) => room.files[fileId]).length;
+    if (incomingFileIds.length > 0 && alreadyExistingCount === incomingFileIds.length) {
       socket.emit("import-complete", {
         filesImported: 0,
         foldersImported: 0,
