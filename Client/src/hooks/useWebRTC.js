@@ -68,7 +68,7 @@ export function useWebRTC({ socketRef, joined, usersRef, showVideo }) {
 
     pc.ontrack = ({ streams }) => {
       const stream = streams[0];
-      const user = usersRef?.current?.find((entry) => entry.id === remoteId);
+      const user = usersRef?.current?.find((entry) => entry.socketId === remoteId);
       setRemoteStreams((prev) => ({
         ...prev,
         [remoteId]: { stream, username: user?.username || "Peer" },
@@ -117,7 +117,7 @@ export function useWebRTC({ socketRef, joined, usersRef, showVideo }) {
     if (!socket?.connected) return;
 
     const peerIds = (usersRef?.current || [])
-      .map((entry) => entry.id)
+      .map((entry) => entry.socketId)
       .filter((id) => id && id !== socket.id);
 
     for (const peerId of peerIds) {
@@ -173,6 +173,10 @@ export function useWebRTC({ socketRef, joined, usersRef, showVideo }) {
   useEffect(() => {
     const socket = socketRef.current;
     if (!socket || !joined) return undefined;
+    const isPolite = (remoteId) => {
+      if (!socket?.id || !remoteId) return false;
+      return String(socket.id) < String(remoteId);
+    };
 
     const handlePeerJoined = ({ socketId }) => {
       if (callEndedRef.current) return;
@@ -193,15 +197,26 @@ export function useWebRTC({ socketRef, joined, usersRef, showVideo }) {
     const handleOffer = async ({ from, offer }) => {
       if (callEndedRef.current) return;
       const pc = createPC(from);
-
-      localStreamRef.current?.getTracks().forEach((track) => {
-        if (!pc.getSenders().some((sender) => sender.track === track)) {
-          pc.addTrack(track, localStreamRef.current);
-        }
-      });
+      const offerCollision = pc.signalingState !== "stable" || makingOfferRef.current[from];
+      if (offerCollision && !isPolite(from)) {
+        return;
+      }
 
       try {
+        if (pc.signalingState !== "stable") {
+          try {
+            await pc.setLocalDescription({ type: "rollback" });
+          } catch {
+            removePeer(from);
+            createPC(from);
+          }
+        }
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        localStreamRef.current?.getTracks().forEach((track) => {
+          if (!pc.getSenders().some((sender) => sender.track === track)) {
+            pc.addTrack(track, localStreamRef.current);
+          }
+        });
         await drainIce(from);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -215,14 +230,15 @@ export function useWebRTC({ socketRef, joined, usersRef, showVideo }) {
       if (callEndedRef.current) return;
       const pc = pcsRef.current[from];
       if (!pc) return;
+      if (pc.signalingState !== "have-local-offer") return;
 
       try {
-        if (pc.signalingState === "have-local-offer") {
-          await pc.setRemoteDescription(new RTCSessionDescription(answer));
-          await drainIce(from);
-        }
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        await drainIce(from);
       } catch (error) {
-        console.error("[Signal] answer handler", error);
+        if (error?.name !== "InvalidStateError") {
+          console.error("[Signal] answer handler", error);
+        }
       }
     };
 

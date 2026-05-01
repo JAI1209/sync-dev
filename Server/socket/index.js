@@ -35,6 +35,7 @@ async function attachRedisAdapter(io) {
 
 async function initSocket(httpServer) {
   const io = new Server(httpServer, {
+    maxHttpBuffer: 50 * 1024 * 1024,
     cors: {
       origin(origin, callback) {
         const allowed = (process.env.CLIENT_ORIGIN || process.env.CORS_ORIGINS || "http://localhost:5173")
