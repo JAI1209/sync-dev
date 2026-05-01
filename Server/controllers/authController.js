@@ -168,28 +168,18 @@ async function resetPassword(req, res) {
 }
 
 async function getMe(req, res) {
-  const authHeader = req.header("Authorization") || "";
-  const token = authHeader.replace("Bearer ", "");
-
-  if (!token) {
-    return res.status(401).json({ msg: "No token provided" });
-  }
-
   try {
-    const decoded = jwt.verify(token, config.jwtSecret);
-    const user = await userService.findById(decoded.user.id);
-
-    if (!user) {
-      return res.status(401).json({ msg: "Invalid token" });
-    }
-
+    const userId = req.auth?.user?.id;
+    if (!userId) return res.status(401).json({ msg: "Authentication required" });
+    const user = await userService.findById(userId);
+    if (!user) return res.status(401).json({ msg: "User not found" });
     return res.json({
       username: user.username,
       email: user.email,
       githubConnected: Boolean(user.githubId),
     });
   } catch (err) {
-    return res.status(401).json({ msg: "Invalid token" });
+    return res.status(500).json({ msg: "Server error" });
   }
 }
 

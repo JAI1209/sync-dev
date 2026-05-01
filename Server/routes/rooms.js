@@ -1,5 +1,6 @@
 const router = require("express").Router();
 const Room = require("../models/Room");
+const { randomBytes } = require("crypto");
 const { authJwt } = require("../middleware/authJwt");
 const { assignRoomOwner } = require("../middleware/rbac");
 const roomService = require("../services/roomService");
@@ -7,9 +8,10 @@ const roomService = require("../services/roomService");
 const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 function generateRoomId(length = 8) {
+  const bytes = randomBytes(length);
   let roomId = "";
   for (let index = 0; index < length; index += 1) {
-    roomId += ROOM_ALPHABET[Math.floor(Math.random() * ROOM_ALPHABET.length)];
+    roomId += ROOM_ALPHABET[bytes[index] % ROOM_ALPHABET.length];
   }
   return roomId;
 }
