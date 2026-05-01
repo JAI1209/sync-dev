@@ -71,7 +71,7 @@ function importErrorResponse(e, context = {}) {
   if (e.status === 401) {
     return {
       status: 401,
-      msg: "GitHub rejected the request. Sign in with GitHub again.",
+      msg: "GitHub auth error: Your GitHub session expired. Reconnect GitHub from the login page to import private repos. Public repos do not require GitHub sign-in.",
     };
   }
   if (e.status === 403) {
@@ -86,8 +86,8 @@ function importErrorResponse(e, context = {}) {
     return {
       status: 403,
       msg: hasGithubToken
-        ? "GitHub denied access to that repository or branch. Check the repo, branch, and GitHub account permissions."
-        : "GitHub denied anonymous access to that repository or branch. If it is private, sign in with GitHub and try again.",
+        ? "GitHub access denied. Check the repo name and your GitHub account permissions."
+        : "GitHub access denied. This may be a private repository — connect your GitHub account from the login page to import it.",
     };
   }
   if (e.status === 404) {

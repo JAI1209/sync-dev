@@ -31,9 +31,9 @@ export default function ParticipantsPanel({
       <div className="participants-scroll">
         {visibleUsers.map((user) => (
           <div
-            key={user.id}
-            className={`participant-card ${mutedPeers.has(user.id) ? "muted" : ""}`}
-            onMouseEnter={() => setHoveredUser(user.id)}
+            key={user.userId ?? user.socketId}
+            className={`participant-card ${mutedPeers.has(user.socketId) ? "muted" : ""}`}
+            onMouseEnter={() => setHoveredUser(user.socketId)}
             onMouseLeave={() => setHoveredUser(null)}
           >
             <div className={`participant-avatar ${user.username === username ? "you" : ""}`}>
@@ -49,23 +49,23 @@ export default function ParticipantsPanel({
             </div>
             <span className="participant-status active" />
 
-            {hoveredUser === user.id && user.username !== username && (
+            {hoveredUser === user.socketId && user.username !== username && (
               <button
                 type="button"
                 className="participant-mute"
                 onClick={() =>
                   setMutedPeers((previous) => {
                     const next = new Set(previous);
-                    if (next.has(user.id)) {
-                      next.delete(user.id);
+                    if (next.has(user.socketId)) {
+                      next.delete(user.socketId);
                     } else {
-                      next.add(user.id);
+                      next.add(user.socketId);
                     }
                     return next;
                   })
                 }
               >
-                {mutedPeers.has(user.id) ? "Unmute" : "Mute"}
+                {mutedPeers.has(user.socketId) ? "Unmute" : "Mute"}
               </button>
             )}
           </div>
