@@ -103,8 +103,14 @@ function pruneIdle() {
   for (const [roomId, entry] of pool.entries()) {
     if (now - entry.lastUsed > IDLE_TTL_MS) {
       console.log(`[Pool] Pruning idle container for room ${roomId}`);
-      destroy(roomId);
+      destroy(roomId).catch(() => {});
     }
+  }
+}
+
+async function destroyAll() {
+  for (const [roomId] of pool.entries()) {
+    await destroy(roomId).catch(() => {});
   }
 }
 
@@ -112,6 +118,7 @@ module.exports = {
   getOrCreate,
   destroy,
   pruneIdle,
+  destroyAll,
   docker,
   IMAGE_MAP,
 };

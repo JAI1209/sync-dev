@@ -79,6 +79,16 @@ async function initSocket(httpServer) {
 
   io.on("connection", (socket) => {
     registerRoomHandlers(io, socket);
+    socket.on("refresh-token", async ({ token }) => {
+      try {
+        const decoded = jwt.verify(token, config.jwtSecret);
+        const newToken = jwt.sign({ user: decoded.user }, config.jwtSecret, { expiresIn: "7d" });
+        socket.emit("token-refreshed", { token: newToken });
+      } catch {
+        socket.emit("token-refresh-failed");
+      }
+    });
+
   });
 
   return io;

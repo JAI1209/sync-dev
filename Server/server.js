@@ -25,6 +25,9 @@ const { connectDB } = require("./config/db");
 const { disconnectRedis } = require("./config/redis");
 const { initSocket } = require("./socket");
 const roomService = require("./services/roomService");
+const terminalSessions = require("./services/terminalSessions");
+const validateEnv = require("./config/validateEnv");
+const { redis } = require("./config/redis");
 const { createProxyMiddleware } = require("http-proxy-middleware");
 
 const app = express();
@@ -49,14 +52,13 @@ app.use(securityHeaders);
 app.use(sanitizeInput);
 app.use(express.json({ limit: "32mb" }));
 
-const terminalSessions = new Map();
 app.set("terminalSessions", terminalSessions);
 
 app.use("/preview/:roomId", (req, res, next) => {
   const session = terminalSessions.get(req.params.roomId);
   if (!session) return res.status(404).send("No preview available for this room");
   const proxy = createProxyMiddleware({
-    target: `http://localhost:${session.port}`,
+    target: `http://localhost:${session.previewPort || session.port}`,
     changeOrigin: true,
     pathRewrite: { [`^/preview/${req.params.roomId}`]: "" },
     ws: true,
@@ -65,6 +67,19 @@ app.use("/preview/:roomId", (req, res, next) => {
   proxy(req, res, next);
 });
 
+
+
+app.get("/health", async (_req, res) => {
+  const mongo = mongoose.connection.readyState === 1 ? "ok" : "degraded";
+  const redisStatus = await redis.ping().then(() => "ok").catch(() => "degraded");
+  res.json({
+    status: mongo === "ok" && redisStatus === "ok" ? "ok" : "degraded",
+    mongo,
+    redis: redisStatus,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+});
 
 // Rate limiting for auth routes (stricter)
 app.use("/api/auth/login", rateLimitMiddleware("login"));
@@ -105,9 +120,12 @@ server.on("error", (err) => {
   process.exit(1);
 });
 
+validateEnv();
+
 async function startServer() {
   try {
     await connectDB();
+    await roomService.reconcileEmptyRooms();
     const io = await initSocket(server);
     app.set("io", io);
     server.listen(LISTEN_PORT, () => logger.info("Server running", { port: LISTEN_PORT }));

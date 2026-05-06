@@ -37,25 +37,25 @@ app.post("/execute", async (req, res) => { /* unchanged behavior */
 app.post('/terminal/start', async (req, res) => {
   const { roomId, language } = req.body;
   if (!roomId) return res.status(400).json({ error: 'roomId required' });
-  if (sessions.has(roomId)) return res.json({ ok: true, port: sessions.get(roomId).port, sessionId: sessions.get(roomId).sessionId });
-  const hostPort = await allocatePort();
+  if (sessions.has(roomId)) return res.json({ ok: true, ports: sessions.get(roomId).ports, sessionId: sessions.get(roomId).sessionId });
+  const ports = { 3000: await allocatePort(), 5173: await allocatePort(), 8000: await allocatePort(), 8080: await allocatePort() };
   const image = language === 'python' ? 'syncdev-sandbox:python312' : 'syncdev-sandbox:node20';
   const container = await pool.docker.createContainer({
     Image: image, Tty: true, AttachStdin: true, AttachStdout: true, AttachStderr: true, OpenStdin: true, Cmd: ['/bin/sh'], WorkingDir: '/workspace',
     HostConfig: { Memory: 512 * 1024 * 1024, MemorySwap: 512 * 1024 * 1024, CpuQuota: 100000, CpuPeriod: 100000, NetworkMode: 'bridge', ReadonlyRootfs: false,
       SecurityOpt: ['no-new-privileges'], CapDrop: ['ALL'], CapAdd: ['CHOWN', 'SETUID', 'SETGID'], PidsLimit: 256, AutoRemove: false,
-      PortBindings: { '3000/tcp': [{ HostPort: String(hostPort) }], '5173/tcp': [{ HostPort: String(hostPort) }], '8000/tcp': [{ HostPort: String(hostPort) }], '8080/tcp': [{ HostPort: String(hostPort) }] } },
+      PortBindings: { '3000/tcp': [{ HostPort: String(ports[3000]) }], '5173/tcp': [{ HostPort: String(ports[5173]) }], '8000/tcp': [{ HostPort: String(ports[8000]) }], '8080/tcp': [{ HostPort: String(ports[8080]) }] } },
     ExposedPorts: { '3000/tcp': {}, '5173/tcp': {}, '8000/tcp': {}, '8080/tcp': {} },
   });
   await container.start();
   const sessionId = uuidv4();
-  sessions.set(roomId, { sessionId, container, port: hostPort, ptyProcess: null });
-  res.json({ ok: true, port: hostPort, sessionId });
+  sessions.set(roomId, { sessionId, container, ports, ptyProcess: null });
+  res.json({ ok: true, ports, sessionId });
 });
 
 app.delete('/terminal/:roomId', async (req, res) => {
   const { roomId } = req.params; const session = sessions.get(roomId);
-  if (session) { session.ptyProcess?.kill(); try { await session.container.stop({ t: 2 }); await session.container.remove({ force: true }); } catch {} sessions.delete(roomId); releasePort(session.port); }
+  if (session) { session.ptyProcess?.kill(); try { await session.container.stop({ t: 2 }); await session.container.remove({ force: true }); } catch {} Object.values(session.ports || {}).forEach((port) => releasePort(port)); sessions.delete(roomId); }
   res.json({ ok: true });
 });
 
@@ -91,7 +91,7 @@ prebuildImages().then(() => {
             session.ptyProcess = ptyProcess;
             ptyProcess.onData((chunk) => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ type: 'output', data: chunk })));
             ptyProcess.onExit(({ exitCode }) => { if (ws.readyState === ws.OPEN) { ws.send(JSON.stringify({ type: 'exit', code: exitCode })); ws.close(); } });
-            ws.send(JSON.stringify({ type: 'ready', port: session.port }));
+            ws.send(JSON.stringify({ type: 'ready', ports: session.ports }));
             return;
           }
         } catch {}
@@ -100,4 +100,19 @@ prebuildImages().then(() => {
       catch { session.ptyProcess?.write(data.toString()); }
     });
   });
-}).catch((err) => { console.error('[ExecService] Failed to prepare sandbox images:', err.message); process.exit(1); });
+}).catch((err) => { console.error('[ExecService] Failed to prepare sandbox images:', err.message); });
+
+
+async function shutdown(signal) {
+  console.log(`[ExecService] ${signal} received, cleaning up...`);
+  for (const [roomId, session] of sessions.entries()) {
+    session.ptyProcess?.kill();
+    try { await session.container.stop({ t: 2 }); await session.container.remove({ force: true }); } catch {}
+    Object.values(session.ports || {}).forEach((port) => releasePort(port));
+    sessions.delete(roomId);
+  }
+  await pool.destroyAll();
+  process.exit(0);
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

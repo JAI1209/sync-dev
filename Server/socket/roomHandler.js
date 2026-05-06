@@ -10,7 +10,9 @@ const { extToLanguage } = require("../utils/extToLanguage");
 const WebSocket = require("ws");
 const EXEC_URL = process.env.EXEC_SERVICE_URL || "http://localhost:4000";
 const EXEC_SECRET = process.env.EXEC_SERVICE_SECRET || "change-me-in-production";
-const terminalSockets = new Map();
+const terminalSessions = require("../services/terminalSessions");
+const socketHandler = require("../utils/socketHandler");
+const { redis, ensureRedisConnection } = require("../config/redis");
 
 const AUTO_JOIN_VIEWER = String(process.env.RBAC_AUTO_JOIN_VIEWER || "true").toLowerCase() !== "false";
 
@@ -504,16 +506,23 @@ async function handleRunCode(io, socket, { roomId, command, language } = {}) {
 
   socket.emit("run-started", { roomId });
 
+  const runCommand = command || inferCommand(room, language);
   try {
     await streamExec({
       roomId,
       files,
-      command: command || inferCommand(room, language),
+      command: runCommand,
       language: language || "javascript",
       onChunk({ type, payload }) {
         io.to(roomId).emit("run-output", { type, payload });
       },
     });
+    if (await ensureRedisConnection()) {
+      const historyKey = `exechistory:${roomId}`;
+      await redis.lpush(historyKey, JSON.stringify({ command: runCommand, language: language || "javascript", exitCode: 0, timestamp: Date.now(), triggeredBy: socket.username }));
+      await redis.ltrim(historyKey, 0, 19);
+      await redis.expire(historyKey, 86400);
+    }
   } catch (err) {
     socket.emit("run-output", {
       type: "stderr",
@@ -543,280 +552,81 @@ async function handleKillRun(io, socket, { roomId } = {}) {
 
 
 async function handleStartTerminal(io, socket, { roomId, language } = {}) {
- if (!roomId) return; const perm = await checkSocketPermission(socket, roomId, "EXECUTE_CODE"); if (!perm.allowed) return emitPermissionDenied(socket, roomId, "EXECUTE_CODE", perm);
- const room = await roomService.getRoom(roomId); if (!room) return; const files = {}; for (const file of Object.values(room.files || {})) { if (!file?.name) continue; files[buildFilePath(file, room.folders || {})] = file.content || ""; }
- try { const startRes = await fetch(`${EXEC_URL}/terminal/start`, { method:"POST", headers:{"Content-Type":"application/json","x-internal-secret":EXEC_SECRET}, body: JSON.stringify({ roomId, language: language || "javascript" })});
- if (!startRes.ok) throw new Error(await startRes.text()); const { port } = await startRes.json(); const wsUrl = `${EXEC_URL.replace("http", "ws")}/terminal/ws?roomId=${encodeURIComponent(roomId)}&secret=${encodeURIComponent(EXEC_SECRET)}`; const ptyWs = new WebSocket(wsUrl); terminalSockets.set(roomId, { port, ptyWs });
- ptyWs.on("open", ()=>ptyWs.send(JSON.stringify({ type:"init", files, cols:120, rows:30 })));
- ptyWs.on("message", (data)=>{ try { const msg = JSON.parse(data.toString()); if (msg.type==="ready") io.to(roomId).emit("terminal-ready", { roomId, previewUrl: `/preview/${roomId}/`}); else if (msg.type==="output") io.to(roomId).emit("terminal-output", { roomId, data: msg.data}); else if (msg.type==="exit") io.to(roomId).emit("terminal-exit", { roomId, code: msg.code}); } catch {} });
- } catch (err) { socket.emit("terminal-output", { roomId, data:`\r\n[SyncDev] Failed to start terminal: ${err.message}\r\n` }); }
-}
-function handleTerminalInput(_io, socket, { roomId, data } = {}) { const term=terminalSockets.get(roomId); if (term?.ptyWs?.readyState===WebSocket.OPEN) term.ptyWs.send(JSON.stringify({type:"input",data})); }
-function handleTerminalResize(_io, socket, { roomId, cols, rows } = {}) { const term=terminalSockets.get(roomId); if (term?.ptyWs?.readyState===WebSocket.OPEN) term.ptyWs.send(JSON.stringify({type:"resize",cols,rows})); }
-async function handleStopTerminal(io, socket, { roomId } = {}) { const term=terminalSockets.get(roomId); if (term?.ptyWs) term.ptyWs.close(); await fetch(`${EXEC_URL}/terminal/${encodeURIComponent(roomId)}`, { method:"DELETE", headers:{"x-internal-secret":EXEC_SECRET} }).catch(()=>{}); terminalSockets.delete(roomId); io.to(roomId).emit("terminal-stopped", { roomId }); }
+  if (!roomId) return;
+  const startRes = await fetch(`${EXEC_URL}/terminal/start`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-internal-secret": EXEC_SECRET,
+    },
+    body: JSON.stringify({ roomId, language }),
+  });
 
-function handleRetryUpload(io, socket) {
-  socket.emit("upload-retry-ack");
-}
-
-async function handleLeaveRoom(io, socket, { roomId } = {}) {
-  try {
-    const targetRoomId = roomId || socket.roomId;
-    if (!targetRoomId) return;
-
-    const room = await roomService.getRoom(targetRoomId);
-    socket.leave(targetRoomId);
-
-    if (room) {
-      room.users = room.users.filter((user) => user.socketId !== socket.id);
-      await roomService.setRoom(targetRoomId, room);
-      io.to(targetRoomId).emit("users-update", room.users);
-      io.to(targetRoomId).emit("user-left", { socketId: socket.id });
-      io.to(targetRoomId).emit("peer-left", { socketId: socket.id });
-      if (room.users.length === 0) {
-        roomService.persistRoom(targetRoomId);
-        roomService.scheduleRoomCleanup(targetRoomId);
-        await destroyRoomContainer(targetRoomId);
-      }
-    }
-
-    socket.roomId = null;
-    socket.userRole = null;
-  } catch (err) {
-    console.error("[Room] leave-room error:", err.message);
-    socket.emit("operation-error", { msg: "Failed to leave room cleanly" });
+  if (!startRes.ok) {
+    throw new Error(await startRes.text());
   }
-}
 
-async function handleTerminateRoom(io, socket, { roomId }) {
-  try {
-    const perm = await checkSocketPermission(socket, roomId, "TRANSFER_OWNERSHIP");
-    if (!perm.allowed) {
-      emitPermissionDenied(socket, roomId, "TRANSFER_OWNERSHIP", {
-        ...perm,
-        reason: "Only the room owner can terminate the room.",
-      });
-      return;
-    }
+  const { ports = {} } = await startRes.json();
+  const previewPort = ports[5173] || ports[3000];
+  const wsUrl = `${EXEC_URL.replace("http", "ws")}/terminal/ws?roomId=${encodeURIComponent(roomId)}&secret=${encodeURIComponent(EXEC_SECRET)}`;
+  const ptyWs = new WebSocket(wsUrl);
+  const previewToken = require("crypto").randomBytes(16).toString("hex");
+  terminalSessions.set(roomId, { ports, previewPort, ptyWs, previewToken });
 
-    const room = (await roomService.getRoom(roomId)) || (await roomService.loadRoomFromDB(roomId));
-    if (!room) {
-      socket.emit("operation-error", { msg: "Room not found" });
-      return;
-    }
-
-    const socketsInRoom = await io.in(roomId).fetchSockets();
-    io.to(roomId).emit("room-terminated", {
-      roomId,
-      msg: "The owner has ended this room.",
-    });
-
-    await Promise.all([
-      Room.findOneAndDelete({ roomId }),
-      RoomMember.deleteMany({ roomId }),
-      Snapshot.deleteMany({ roomId }),
-    ]);
-    await roomService.destroyRoom(roomId);
-    await destroyRoomContainer(roomId);
-
-    setTimeout(() => {
-      socketsInRoom.forEach((participant) => {
-        participant.leave(roomId);
-        participant.roomId = null;
-        participant.disconnect(true);
-      });
-    }, 150);
-  } catch (err) {
-    console.error("[Room] terminate-room error:", err.message);
-    socket.emit("operation-error", { msg: "Failed to terminate room" });
-  }
-}
-
-async function handleChangeRole(io, socket, { roomId, username, role }) {
-  try {
-    const perm = await checkSocketPermission(socket, roomId, "MANAGE_ROLES");
-    if (!perm.allowed) {
-      emitPermissionDenied(socket, roomId, "MANAGE_ROLES", perm);
-      return;
-    }
-
-    if (!ROLE_HIERARCHY[role]) {
-      socket.emit("operation-error", { msg: "Invalid role" });
-      return;
-    }
-
-    const target = await RoomMember.findOne({ roomId, username });
-    if (!target) {
-      socket.emit("operation-error", { msg: "Member not found" });
-      return;
-    }
-
-    if (target.role === "owner") {
-      emitPermissionDenied(socket, roomId, "MANAGE_ROLES", {
-        reason: "Cannot change owner's role directly.",
-        currentRole: perm.role,
-      });
-      return;
-    }
-
-    const requesterLevel = ROLE_HIERARCHY[perm.role] || 0;
-    const currentTargetLevel = ROLE_HIERARCHY[target.role] || 0;
-    const nextTargetLevel = ROLE_HIERARCHY[role] || 0;
-
-    if (currentTargetLevel >= requesterLevel || nextTargetLevel >= requesterLevel) {
-      emitPermissionDenied(socket, roomId, "MANAGE_ROLES", {
-        reason: "Cannot change a member with equal or higher role.",
-        currentRole: perm.role,
-      });
-      return;
-    }
-
-    const oldRole = target.role;
-    target.role = role;
-    await target.save();
-
+  ptyWs.on("open", async () => {
     const room = await roomService.getRoom(roomId);
-    if (room) {
-      room.users = room.users.map((user) =>
-        String(user.userId) === String(target.userId) ? { ...user, role } : user
-      );
-      await roomService.setRoom(roomId, room);
-      io.to(roomId).emit("users-update", room.users);
-    }
+    ptyWs.send(JSON.stringify({ type: "init", files: room?.files || {}, cols: 120, rows: 30 }));
+  });
 
-    const sockets = await io.in(roomId).fetchSockets();
-    sockets.forEach((participant) => {
-      if (String(participant.userId) !== String(target.userId)) return;
-      participant.userRole = role;
-      participant.emit("role-changed", {
-        roomId,
-        oldRole,
-        newRole: role,
-        changedBy: socket.username,
-      });
-    });
+  ptyWs.on("message", (data) => {
+    try {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === "ready") {
+        io.to(roomId).emit("terminal-ready", { roomId, previewUrl: `/preview/${roomId}/?token=${previewToken}` });
+      } else if (msg.type === "output") {
+        io.to(roomId).emit("terminal-output", { roomId, data: msg.data });
+      } else if (msg.type === "exit") {
+        io.to(roomId).emit("terminal-exit", { roomId, code: msg.code });
+      }
+    } catch {}
+  });
+}
 
-    io.to(roomId).emit("members-updated", { roomId });
-  } catch (err) {
-    console.error("[Room] change-role error:", err.message);
-    socket.emit("operation-error", { msg: "Failed to change role" });
+function handleTerminalInput(_io, _socket, { roomId, data } = {}) {
+  const term = terminalSessions.get(roomId);
+  if (term?.ptyWs?.readyState === WebSocket.OPEN) {
+    term.ptyWs.send(JSON.stringify({ type: "input", data }));
   }
 }
 
-function handleWebrtcOffer(io, socket, { to, offer }) {
-  io.to(to).emit("webrtc-offer", { from: socket.id, offer });
-}
-
-function handleWebrtcAnswer(io, socket, { to, answer }) {
-  io.to(to).emit("webrtc-answer", { from: socket.id, answer });
-}
-
-function handleWebrtcIceCandidate(io, socket, { to, candidate }) {
-  io.to(to).emit("webrtc-ice-candidate", { from: socket.id, candidate });
-}
-
-function handleWebrtcEndCall(io, socket) {
-  if (!socket.roomId) return;
-  socket.to(socket.roomId).emit("webrtc-end-call", { from: socket.id });
-}
-
-async function handleDisconnect(io, socket) {
-  const { roomId } = socket;
-  const room = roomId && (await roomService.getRoom(roomId));
-  if (room) {
-    room.users = room.users.filter((u) => u.socketId !== socket.id);
-    io.to(roomId).emit("users-update", room.users);
-    socket.to(roomId).emit("peer-left", { socketId: socket.id });
-    if (room.users.length === 0) {
-      roomService.persistRoom(roomId);
-      roomService.scheduleRoomCleanup(roomId);
-      await destroyRoomContainer(roomId);
-    }
+function handleTerminalResize(_io, _socket, { roomId, cols, rows } = {}) {
+  const term = terminalSessions.get(roomId);
+  if (term?.ptyWs?.readyState === WebSocket.OPEN) {
+    term.ptyWs.send(JSON.stringify({ type: "resize", cols, rows }));
   }
-  console.log("user disconnected:", socket.id);
 }
 
-function buildFilePath(file, folders = {}) {
-  const parts = [file.name];
-  let parentId = file.parentId;
-  let depth = 0;
-  const visited = new Set();
-
-  while (parentId && folders[parentId] && depth < 50 && !visited.has(parentId)) {
-    visited.add(parentId);
-    depth += 1;
-    const folder = folders[parentId];
-    parts.unshift(folder.name);
-    parentId = folder.parentId;
-  }
-
-  return parts.join("/");
+async function handleStopTerminal(io, _socket, { roomId } = {}) {
+  const term = terminalSessions.get(roomId);
+  if (term?.ptyWs) term.ptyWs.close();
+  await fetch(`${EXEC_URL}/terminal/${encodeURIComponent(roomId)}`, {
+    method: "DELETE",
+    headers: { "x-internal-secret": EXEC_SECRET },
+  }).catch(() => {});
+  terminalSessions.delete(roomId);
+  io.to(roomId).emit("terminal-stopped", { roomId });
 }
 
-function shellQuote(value) {
-  return `'${String(value).replace(/'/g, "'\\''")}'`;
+async function handleGetExecHistory(_io, socket, { roomId } = {}) {
+  const ready = await ensureRedisConnection();
+  if (!ready) return socket.emit("exec-history", []);
+  const key = `exechistory:${roomId}`;
+  const items = await redis.lrange(key, 0, 19);
+  socket.emit("exec-history", items.map((i) => JSON.parse(i)));
 }
 
-function inferCommand(room, language) {
-  const lang = String(language || "javascript").toLowerCase();
-  const activeFile = room?.activeFile ? room.files?.[room.activeFile] : null;
-  const activePath = activeFile ? shellQuote(buildFilePath(activeFile, room.folders || {})) : null;
-
-  if (lang === "python") return `python3 ${activePath || "main.py"}`;
-  if (lang === "shell") return `sh ${activePath || "entrypoint.sh"}`;
-  if (lang === "typescript" || lang === "tsx") return `npx --yes tsx ${activePath || "index.ts"}`;
-  return `node ${activePath || "index.js"}`;
+function handleCursorMove(_io, socket, { roomId, fileId, position } = {}) {
+  socket.to(roomId).emit("cursor-update", { socketId: socket.id, username: socket.username, fileId, position });
 }
 
-function registerRoomHandlers(io, socket) {
-  const username = socket.auth?.user?.username || "anonymous";
-  if (process.env.NODE_ENV !== "production") {
-    socket.onAny((event, ...args) => {
-      console.log(`[DEBUG] Event "${event}" from ${username}`);
-    });
-  }
 
-  socket.on("join-room", (data) => handleJoinRoom(io, socket, data));
-  socket.on("file-change", (data) => handleFileChange(io, socket, data));
-  socket.on("yjs-update", (data) => handleYjsUpdate(io, socket, data));
-  socket.on("create-file", (data) => handleCreateFile(io, socket, data));
-  socket.on("create-folder", (data) => handleCreateFolder(io, socket, data));
-  socket.on("rename-file", (data) => handleRenameFile(io, socket, data));
-  socket.on("rename-folder", (data) => handleRenameFolder(io, socket, data));
-  socket.on("delete-file", (data) => handleDeleteFile(io, socket, data));
-  socket.on("delete-folder", (data) => handleDeleteFolder(io, socket, data));
-  socket.on("switch-file", (data) => handleSwitchFile(io, socket, data));
-  socket.on("bulk-import", (data) => handleBulkImport(io, socket, data));
-  socket.on("start-github-import", (data) => handleStartGithubImport(io, socket, data));
-  socket.on("get-file-page", (data) => handleGetFilePage(io, socket, data));
-  socket.on("run-code", (data) => handleRunCode(io, socket, data));
-  socket.on("start-terminal", (data) => handleStartTerminal(io, socket, data));
-  socket.on("terminal-input", (data) => handleTerminalInput(io, socket, data));
-  socket.on("terminal-resize", (data) => handleTerminalResize(io, socket, data));
-  socket.on("stop-terminal", (data) => handleStopTerminal(io, socket, data));
-  socket.on("kill-run", (data) => handleKillRun(io, socket, data));
-  socket.on("leave-room", (data) => handleLeaveRoom(io, socket, data));
-  socket.on("terminate-room", (data) => handleTerminateRoom(io, socket, data));
-  socket.on("change-role", (data) => handleChangeRole(io, socket, data));
-  socket.on("retry-upload", () => handleRetryUpload(io, socket));
-  socket.on("webrtc-offer", (data) => handleWebrtcOffer(io, socket, data));
-  socket.on("webrtc-answer", (data) => handleWebrtcAnswer(io, socket, data));
-  socket.on("webrtc-ice-candidate", (data) => handleWebrtcIceCandidate(io, socket, data));
-  socket.on("webrtc-end-call", () => handleWebrtcEndCall(io, socket));
-  socket.on("disconnect", () => handleDisconnect(io, socket));
-}
-
-module.exports = {
-  registerRoomHandlers,
-  __testables: {
-    handleFileChange,
-    handleBulkImport,
-    handleStartGithubImport,
-    handleGetFilePage,
-    handleRunCode,
-    handleKillRun,
-    buildFilePath,
-    inferCommand,
-    handleSwitchFile,
-  },
-};
