@@ -26,6 +26,14 @@ async function uploadFiles(container, files) {
   await container.putArchive(pack, { path: "/workspace" });
 }
 
+/**
+ * Upload files into container /workspace and run a command.
+ * Streams stdout/stderr via send callback.
+ * @param {import("dockerode").Container} container
+ * @param {Record<string, string>} files
+ * @param {string} command
+ * @param {{ send: (type: string, payload: string) => void }} opts
+ */
 async function exec(container, files, command, { send }) {
   await uploadFiles(container, files);
 
