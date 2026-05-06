@@ -323,6 +323,12 @@ async function handleSwitchFile(io, socket, { roomId, fileId }) {
 
 async function handleBulkImport(io, socket, { roomId, files, folders, isLastChunk = true }) {
   try {
+    const totalSize = Object.values(files || {}).reduce((sum, f) => sum + (f?.content?.length || 0), 0);
+    if (totalSize > 10 * 1024 * 1024) {
+      socket.emit("operation-error", { msg: "Import exceeds 10MB total size limit" });
+      return;
+    }
+
     const perm = await checkSocketPermission(socket, roomId, "IMPORT_FROM_GITHUB");
     if (!perm.allowed) {
       const createPerm = await checkSocketPermission(socket, roomId, "CREATE_FILES");
@@ -728,7 +734,6 @@ function registerRoomHandlers(io, socket) {
   socket.on("stop-terminal",        sh(handleStopTerminal));
   socket.on("get-exec-history",     sh(handleGetExecHistory));
   socket.on("cursor-move",          sh(handleCursorMove));
-  socket.on("kill-run",             sh(handleKillRun));
   socket.on("leave-room",           sh(handleLeaveRoom));
   socket.on("terminate-room",       sh(handleTerminateRoom));
   socket.on("change-role",          sh(handleChangeRole));
@@ -748,9 +753,3 @@ module.exports = {
   inferCommand,
   buildFilePath,
 };
-  const totalSize = Object.values(files || {}).reduce((sum, f) => sum + (f?.content?.length || 0), 0);
-  if (totalSize > 10 * 1024 * 1024) {
-    socket.emit("operation-error", { msg: "Import exceeds 10MB total size limit" });
-    return;
-  }
-
