@@ -41,7 +41,7 @@ app.post('/terminal/start', async (req, res) => {
   const ports = { 3000: await allocatePort(), 5173: await allocatePort(), 8000: await allocatePort(), 8080: await allocatePort() };
   const image = language === 'python' ? 'syncdev-sandbox:python312' : 'syncdev-sandbox:node20';
   const container = await pool.docker.createContainer({
-    Image: image, Tty: true, AttachStdin: true, AttachStdout: true, AttachStderr: true, OpenStdin: true, Cmd: ['/bin/sh'], WorkingDir: '/workspace',
+    Image: image, Tty: true, AttachStdin: true, AttachStdout: true, AttachStderr: true, OpenStdin: true, Cmd: ['/bin/bash'], WorkingDir: '/workspace',
     HostConfig: { Memory: 512 * 1024 * 1024, MemorySwap: 512 * 1024 * 1024, CpuQuota: 100000, CpuPeriod: 100000, NetworkMode: 'bridge', ReadonlyRootfs: false,
       SecurityOpt: ['no-new-privileges'], CapDrop: ['ALL'], CapAdd: ['CHOWN', 'SETUID', 'SETGID'], PidsLimit: 256, AutoRemove: false,
       PortBindings: { '3000/tcp': [{ HostPort: String(ports[3000]) }], '5173/tcp': [{ HostPort: String(ports[5173]) }], '8000/tcp': [{ HostPort: String(ports[8000]) }], '8080/tcp': [{ HostPort: String(ports[8080]) }] } },
@@ -87,7 +87,7 @@ prebuildImages().then(() => {
           if (msg.type === 'init') {
             filesLoaded = true;
             await uploadFilesToContainer(session.container, msg.files || {});
-            const ptyProcess = pty.spawn('docker', ['exec', '-it', session.container.id, '/bin/sh'], { name: 'xterm-256color', cols: msg.cols || 120, rows: msg.rows || 30, env: { ...process.env, TERM: 'xterm-256color', HOME: '/workspace' } });
+            const ptyProcess = pty.spawn('docker', ['exec', '-it', session.container.id, '/bin/bash'], { name: 'xterm-256color', cols: msg.cols || 120, rows: msg.rows || 30, env: { ...process.env, TERM: 'xterm-256color', HOME: '/workspace', PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' } });
             session.ptyProcess = ptyProcess;
             ptyProcess.onData((chunk) => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ type: 'output', data: chunk })));
             ptyProcess.onExit(({ exitCode }) => { if (ws.readyState === ws.OPEN) { ws.send(JSON.stringify({ type: 'exit', code: exitCode })); ws.close(); } });

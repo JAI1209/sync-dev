@@ -15,17 +15,21 @@ export default function RunTerminal({ socketRef, roomId, language, fileName }) {
   const [running, setRunning] = useState(false);
   const [previewUrl, setPreviewUrl] = useState("");
   const [previewOpen, setPreviewOpen] = useState(true);
-  const hostRef = useRef(null); const termRef = useRef(null); const fitRef = useRef(null);
+  const hostRef = useRef(null); const termRef = useRef(null); const fitRef = useRef(null); const pendingInputRef = useRef([]);
 
-  useEffect(()=>{const term = new Terminal({cursorBlink:true, convertEol:true, theme:{background:isDark?"#050b12":"#fff"}}); const fit=new FitAddon(); term.loadAddon(fit); term.open(hostRef.current); fit.fit(); termRef.current=term; fitRef.current=fit;
-    term.onData((data)=>socketRef.current?.emit("terminal-input", { roomId, data }));
+  useEffect(()=>{const term = new Terminal({cursorBlink:true, convertEol:true, theme:{background:isDark?"#050b12":"#fff"}}); const fit=new FitAddon(); term.loadAddon(fit); term.open(hostRef.current); fit.fit(); term.focus(); termRef.current=term; fitRef.current=fit;
     const ro=new ResizeObserver(()=>{fit.fit(); socketRef.current?.emit("terminal-resize", { roomId, cols: term.cols, rows: term.rows });}); ro.observe(hostRef.current);
     return ()=>{ro.disconnect(); term.dispose();};}, [roomId, socketRef, isDark]);
 
-  useEffect(()=>{const s=socketRef.current; if(!s) return; const ready=({roomId:r,previewUrl})=>{if(r!==roomId)return; setPreviewUrl(previewUrl); setPreviewOpen(true); setRunning(true)};
+  useEffect(()=>{const term=termRef.current; if(!term) return; const onData=(data)=>{const s=socketRef.current; if(!s) { pendingInputRef.current.push(data); return; } if(pendingInputRef.current.length){ pendingInputRef.current.forEach((chunk)=>s.emit("terminal-input", { roomId, data: chunk })); pendingInputRef.current=[]; } s.emit("terminal-input", { roomId, data });};
+    const disposable=term.onData(onData); return ()=>disposable.dispose();}, [roomId, socketRef]);
+
+  useEffect(()=>{const s=socketRef.current; if(!s) return; if(pendingInputRef.current.length){ pendingInputRef.current.forEach((data)=>s.emit("terminal-input", { roomId, data })); pendingInputRef.current=[]; }
+    const ready=({roomId:r,previewUrl})=>{if(r!==roomId)return; setPreviewUrl(previewUrl); setPreviewOpen(true); setRunning(true)};
     const out=({roomId:r,data})=>{if(r===roomId) termRef.current?.write(data)}; const ex=({roomId:r,code})=>{if(r===roomId){termRef.current?.writeln(`\r\n\x1b[33m[exited with code ${code}]\x1b[0m`); setRunning(false)}};
-    s.on("terminal-ready", ready); s.on("terminal-output", out); s.on("terminal-exit", ex);
-    return ()=>{s.off("terminal-ready",ready); s.off("terminal-output",out); s.off("terminal-exit",ex);};}, [roomId, socketRef]);
+    const stopped=({roomId:r})=>{ if(r!==roomId) return; setRunning(false); setPreviewUrl(""); setPreviewOpen(false); };
+    s.on("terminal-ready", ready); s.on("terminal-output", out); s.on("terminal-exit", ex); s.on("terminal-stopped", stopped);
+    return ()=>{s.off("terminal-ready",ready); s.off("terminal-output",out); s.off("terminal-exit",ex); s.off("terminal-stopped", stopped);};}, [roomId, socketRef]);
 
   return <div className="run-terminal"><div className="run-terminal__toolbar"><button className="run-terminal__btn run-terminal__btn--primary" onClick={()=>socketRef.current?.emit(running?"stop-terminal":"start-terminal", { roomId, language:selectedLanguage })}>{running?"Stop":"Run"}</button>
   <select className="run-terminal__select" value={selectedLanguage} onChange={(e)=>setSelectedLanguage(e.target.value)}>{LANGUAGE_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></div>
