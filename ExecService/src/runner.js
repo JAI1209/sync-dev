@@ -45,14 +45,15 @@ async function exec(container, files, command, { send }) {
   });
 
   const stream = await processExec.start({ hijack: true, stdin: false });
-  const timeoutMs = Number(process.env.CONTAINER_TIMEOUT_MS || 30000);
+  const raw = process.env.CONTAINER_TIMEOUT_MS;
+  const timeoutMs = raw !== undefined && raw !== "" ? Number(raw) : 30000;
 
   return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (fn) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       fn?.();
       resolve();
     };
@@ -73,17 +74,15 @@ async function exec(container, files, command, { send }) {
 
     container.modem.demuxStream(stream, stdout, stderr);
 
-    const timer = setTimeout(async () => {
-      if (settled) return;
-      send("stderr", `\r\n[SyncDev] Process killed - ${timeoutMs / 1000}s timeout exceeded\r\n`);
-      send("exit", "124");
-      try {
-        await container.kill();
-      } catch {
-        /* container may already be stopped */
-      }
-      finish();
-    }, timeoutMs);
+    const timer = timeoutMs > 0
+      ? setTimeout(async () => {
+          if (settled) return;
+          send("stderr", `\r\n[SyncDev] Process killed - ${timeoutMs / 1000}s timeout exceeded\r\n`);
+          send("exit", "124");
+          try { await container.kill(); } catch { /* already stopped */ }
+          finish();
+        }, timeoutMs)
+      : null;
 
     stream.on("end", async () => {
       try {
@@ -97,7 +96,7 @@ async function exec(container, files, command, { send }) {
 
     stream.on("error", (err) => {
       if (settled) return;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       settled = true;
       reject(err);
     });
