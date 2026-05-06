@@ -1,8 +1,14 @@
 FROM node:20-alpine
 WORKDIR /app
-RUN apk add --no-cache python3 make g++
+
+RUN apk add --no-cache python3 make g++ docker-cli
+RUN addgroup -S execsvc && adduser -S execsvc -G execsvc
+
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY . .
+RUN chown -R execsvc:execsvc /app
+
+USER execsvc
 EXPOSE 4000
-CMD ["npm", "start"]
+CMD ["node", "src/index.js"]

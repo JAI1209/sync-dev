@@ -1,12 +1,15 @@
+const { randomUUID } = require("crypto");
 const EXEC_URL = process.env.EXEC_SERVICE_URL || "http://localhost:4000";
 const EXEC_SECRET = process.env.EXEC_SERVICE_SECRET || "";
 
 async function streamExec({ roomId, files, command, language, onChunk }) {
+  const requestId = randomUUID();
   const res = await fetch(`${EXEC_URL}/execute`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-internal-secret": EXEC_SECRET,
+      "x-request-id": requestId,
     },
     body: JSON.stringify({ roomId, files, command, language }),
   });
@@ -45,9 +48,10 @@ async function streamExec({ roomId, files, command, language, onChunk }) {
 
 async function destroyRoomContainer(roomId) {
   try {
+    const requestId = randomUUID();
     await fetch(`${EXEC_URL}/container/${encodeURIComponent(roomId)}`, {
       method: "DELETE",
-      headers: { "x-internal-secret": EXEC_SECRET },
+      headers: { "x-internal-secret": EXEC_SECRET, "x-request-id": requestId },
     });
   } catch (err) {
     console.error(`[ExecService] Failed to destroy container for ${roomId}:`, err.message);
