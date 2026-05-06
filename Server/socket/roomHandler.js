@@ -576,18 +576,23 @@ async function handleStartTerminal(io, socket, { roomId, language } = {}) {
   // Guard: if a session already exists, just re-emit ready for this socket
   if (terminalSessions.has(roomId)) {
     const existing = terminalSessions.get(roomId);
-    const SERVER_ORIGIN = process.env.PUBLIC_SERVER_URL || "http://localhost:3000";
-    socket.emit("terminal-ready", {
-      roomId,
-      previewUrl: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=3000`,
-      portMap: {
-        3000: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=3000`,
-        5173: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=5173`,
-        8000: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=8000`,
-        8080: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=8080`,
-      },
-    });
-    return;
+    // Only reuse if the ptyWs connection is still alive
+    if (existing.ptyWs?.readyState === WebSocket.OPEN) {
+      const SERVER_ORIGIN = process.env.PUBLIC_SERVER_URL || "http://localhost:3000";
+      socket.emit("terminal-ready", {
+        roomId,
+        previewUrl: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=3000`,
+        portMap: {
+          3000: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=3000`,
+          5173: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=5173`,
+          8000: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=8000`,
+          8080: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=8080`,
+        },
+      });
+      return;
+    }
+    // Session exists but ptyWs is dead — clean it up and fall through to create a new one
+    terminalSessions.delete(roomId);
   }
 
   const rateLimitKey = `terminal:ratelimit:${socket.userId}`;
@@ -736,6 +741,24 @@ async function handleTerminateRoom(io, socket, { roomId } = {}) {
     emitPermissionDenied(socket, roomId, "TERMINATE_ROOM", perm);
     return;
   }
+
+  // Clean up terminal session if one exists for this room
+  const term = terminalSessions.get(roomId);
+  if (term) {
+    if (term.ptyWs?.readyState === WebSocket.OPEN) {
+      term.ptyWs.close();
+    }
+    try {
+      await fetch(`${EXEC_URL}/terminal/${encodeURIComponent(roomId)}`, {
+        method: "DELETE",
+        headers: { "x-internal-secret": EXEC_SECRET },
+      });
+    } catch (err) {
+      console.error("[handleTerminateRoom] Terminal cleanup failed:", err.message);
+    }
+    terminalSessions.delete(roomId);
+  }
+
   await roomService.destroyRoom(roomId);
   io.to(roomId).emit("room-terminated", { roomId });
 }
