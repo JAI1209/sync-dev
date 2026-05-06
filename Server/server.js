@@ -63,11 +63,15 @@ app.use("/preview/:roomId", (req, res, next) => {
     return res.status(403).send("Forbidden");
   }
 
-  const port = session.previewPort;
+  // Resolve which container port the client wants (default 3000)
+  const requestedContainerPort = Number(req.query.port) || 3000;
+  const port = session.ports?.[requestedContainerPort];
   if (!port) return res.status(503).send("Preview not ready");
 
+  const execHost = new URL(process.env.EXEC_SERVICE_URL || "http://localhost:4000").hostname;
+
   createProxyMiddleware({
-    target: `http://${new URL(process.env.EXEC_SERVICE_URL || "http://localhost:4000").hostname}:${port}`,
+    target: `http://${execHost}:${port}`,
     changeOrigin: true,
     ws: true,
     pathRewrite: { [`^/preview/${roomId}`]: "" },

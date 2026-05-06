@@ -573,6 +573,23 @@ async function handleStartTerminal(io, socket, { roomId, language } = {}) {
     return;
   }
 
+  // Guard: if a session already exists, just re-emit ready for this socket
+  if (terminalSessions.has(roomId)) {
+    const existing = terminalSessions.get(roomId);
+    const SERVER_ORIGIN = process.env.PUBLIC_SERVER_URL || "http://localhost:3000";
+    socket.emit("terminal-ready", {
+      roomId,
+      previewUrl: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=3000`,
+      portMap: {
+        3000: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=3000`,
+        5173: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=5173`,
+        8000: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=8000`,
+        8080: `${SERVER_ORIGIN}/preview/${roomId}/?token=${existing.previewToken}&port=8080`,
+      },
+    });
+    return;
+  }
+
   const rateLimitKey = `terminal:ratelimit:${socket.userId}`;
   const ready = await ensureRedisConnection();
   if (ready) {
@@ -598,7 +615,6 @@ async function handleStartTerminal(io, socket, { roomId, language } = {}) {
   }
 
   const { ports = {} } = await startRes.json();
-  const previewPort = ports[5173] || ports[3000];
   const wsUrl = `${EXEC_URL.replace("http", "ws")}/terminal/ws?roomId=${encodeURIComponent(roomId)}&secret=${encodeURIComponent(EXEC_SECRET)}`;
   const ptyWs = new WebSocket(wsUrl);
   ptyWs.on("error", (err) => {
@@ -606,7 +622,7 @@ async function handleStartTerminal(io, socket, { roomId, language } = {}) {
     terminalSessions.delete(roomId);
   });
   const previewToken = require("crypto").randomBytes(16).toString("hex");
-  terminalSessions.set(roomId, { ports, previewPort, ptyWs, previewToken });
+  terminalSessions.set(roomId, { ports, ptyWs, previewToken });
 
   ptyWs.on("open", async () => {
     const room = await roomService.getRoom(roomId);
@@ -623,7 +639,18 @@ async function handleStartTerminal(io, socket, { roomId, language } = {}) {
       const msg = JSON.parse(data.toString());
       if (msg.type === "ready") {
         const SERVER_ORIGIN = process.env.PUBLIC_SERVER_URL || "http://localhost:3000";
-        io.to(roomId).emit("terminal-ready", { roomId, previewUrl: `${SERVER_ORIGIN}/preview/${roomId}/?token=${previewToken}` });
+        const portMap = {
+          3000: `${SERVER_ORIGIN}/preview/${roomId}/?token=${previewToken}&port=3000`,
+          5173: `${SERVER_ORIGIN}/preview/${roomId}/?token=${previewToken}&port=5173`,
+          8000: `${SERVER_ORIGIN}/preview/${roomId}/?token=${previewToken}&port=8000`,
+          8080: `${SERVER_ORIGIN}/preview/${roomId}/?token=${previewToken}&port=8080`,
+        };
+        // Default preview to port 3000 (Express/Node) — user can switch
+        io.to(roomId).emit("terminal-ready", {
+          roomId,
+          previewUrl: portMap[3000],
+          portMap,
+        });
       } else if (msg.type === "output") {
         io.to(roomId).emit("terminal-output", { roomId, data: msg.data });
       } else if (msg.type === "exit") {
