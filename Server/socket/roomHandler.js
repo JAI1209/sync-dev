@@ -601,6 +601,10 @@ async function handleStartTerminal(io, socket, { roomId, language } = {}) {
   const previewPort = ports[5173] || ports[3000];
   const wsUrl = `${EXEC_URL.replace("http", "ws")}/terminal/ws?roomId=${encodeURIComponent(roomId)}&secret=${encodeURIComponent(EXEC_SECRET)}`;
   const ptyWs = new WebSocket(wsUrl);
+  ptyWs.on("error", (err) => {
+    console.error("[handleStartTerminal] ptyWs error:", err.message);
+    terminalSessions.delete(roomId);
+  });
   const previewToken = require("crypto").randomBytes(16).toString("hex");
   terminalSessions.set(roomId, { ports, previewPort, ptyWs, previewToken });
 
@@ -650,7 +654,8 @@ async function handleStopTerminal(io, _socket, { roomId } = {}) {
   if (term?.ptyWs) {
     await new Promise((resolve) => {
       if (term.ptyWs.readyState === WebSocket.OPEN) {
-        term.ptyWs.once("close", resolve);
+        const timer = setTimeout(resolve, 3000);
+        term.ptyWs.once("close", () => { clearTimeout(timer); resolve(); });
         term.ptyWs.close();
       } else {
         resolve();
