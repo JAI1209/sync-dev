@@ -21,6 +21,7 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
   const [selectedLanguage, setSelectedLanguage] = useState(inferredLanguage);
   const [running, setRunning] = useState(false);
   const [previewUrl, setPreviewUrl] = useState("");
+  const [portMap, setPortMap] = useState({});
   const [previewOpen, setPreviewOpen] = useState(true);
   const [scriptMode, setScriptMode] = useState(!isWebProject(files));
   const [socketConnected, setSocketConnected] = useState(false);
@@ -74,16 +75,28 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
     setSocketConnected(true);
     if (pendingInputRef.current.length) { pendingInputRef.current.forEach((data) => s.emit("terminal-input", { roomId, data })); pendingInputRef.current = []; }
 
-    const ready = ({ roomId: r, previewUrl: p }) => { if (r !== roomId) return; setPreviewUrl(p); setPreviewOpen(true); setRunning(true); };
+    const ready = ({ roomId: r, previewUrl: p, portMap: pm }) => {
+      if (r !== roomId) return;
+      setPreviewUrl(p);
+      setPortMap(pm || {});
+      setPreviewOpen(true);
+      setRunning(true);
+    };
     const out = ({ roomId: r, data }) => { if (r === roomId) termRef.current?.write(data); };
     const ex = ({ roomId: r, code }) => { if (r === roomId) { termRef.current?.writeln(`\r\n\x1b[33m[exited with code ${code}]\x1b[0m`); setRunning(false); } };
     const runStarted = ({ roomId: r }) => { if (r === roomId) setRunning(true); };
+    const runFinished = ({ roomId: r }) => { if (r === roomId) setRunning(false); };
     const runOut = ({ type, payload }) => {
       const term = termRef.current;
       if (!term) return;
       if (typeof payload === "string" && payload.includes("__SYNCDEV_HTML_PREVIEW__:")) {
         const filePath = payload.split("__SYNCDEV_HTML_PREVIEW__:")[1]?.trim();
         const fileContent = files?.[filePath] || files?.["index.html"] || "";
+        // Revoke previous blob URL if it exists
+        setPreviewUrl((prev) => {
+          if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
+          return prev;
+        });
         const blob = new Blob([fileContent], { type: "text/html" });
         const url = URL.createObjectURL(blob);
         setPreviewUrl(url);
@@ -97,12 +110,22 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
     };
     const stopped = ({ roomId: r }) => { if (r !== roomId) return; setRunning(false); setPreviewUrl(""); setPreviewOpen(false); };
 
-    s.on("terminal-ready", ready); s.on("terminal-output", out); s.on("terminal-exit", ex); s.on("terminal-stopped", stopped); s.on("run-output", runOut); s.on("run-started", runStarted);
+    s.on("terminal-ready", ready); s.on("terminal-output", out); s.on("terminal-exit", ex); s.on("terminal-stopped", stopped); s.on("run-output", runOut); s.on("run-started", runStarted); s.on("run-finished", runFinished);
     return () => {
       setSocketConnected(false);
-      s.off("terminal-ready", ready); s.off("terminal-output", out); s.off("terminal-exit", ex); s.off("terminal-stopped", stopped); s.off("run-output", runOut); s.off("run-started", runStarted);
+      s.off("terminal-ready", ready); s.off("terminal-output", out); s.off("terminal-exit", ex); s.off("terminal-stopped", stopped); s.off("run-output", runOut); s.off("run-started", runStarted); s.off("run-finished", runFinished);
     };
   }, [roomId, socketRef, socketRef.current, files]);
+
+
+  useEffect(() => {
+    return () => {
+      setPreviewUrl((prev) => {
+        if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
+        return "";
+      });
+    };
+  }, []);
 
   const onRunClick = () => {
     const webMode = isWebProject(files);
@@ -134,6 +157,8 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
   return <div className="run-terminal"><div className="run-terminal__toolbar"><button className="run-terminal__btn run-terminal__btn--primary" onClick={onRunClick}>{running ? "Stop" : "Run"}</button>
     <select className="run-terminal__select" value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value)}>{LANGUAGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</select></div>
     <div className="run-terminal__xterm-host" ref={hostRef} />
-    {!scriptMode && previewUrl && previewOpen && <div className="run-terminal__preview"><div className="run-terminal__preview-bar"><span className="run-terminal__preview-url">{previewUrl}</span><button onClick={() => setPreviewOpen(false)}>Hide preview</button><button onClick={() => window.open(previewUrl, "_blank")}>Open in tab</button></div><iframe src={previewUrl} className="run-terminal__preview-frame" title="App preview" sandbox="allow-scripts allow-same-origin allow-forms" /></div>}
+    {!scriptMode && previewUrl && previewOpen && <div className="run-terminal__preview"><div className="run-terminal__preview-bar"><span className="run-terminal__preview-url">{previewUrl}</span>{Object.keys(portMap).map((p) => (
+      <button key={p} onClick={() => setPreviewUrl(portMap[p])}>:{p}</button>
+    ))}<button onClick={() => setPreviewOpen(false)}>Hide preview</button><button onClick={() => window.open(previewUrl, "_blank")}>Open in tab</button></div><iframe src={previewUrl} className="run-terminal__preview-frame" title="App preview" sandbox="allow-scripts allow-same-origin allow-forms" /></div>}
   </div>;
 }
