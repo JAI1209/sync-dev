@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+  server:
+    build: ./Server
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - MONGODB_URI=mongodb://mongo:27017/syncdev
+      - REDIS_URL=redis://redis:6379
+      - CLIENT_ORIGIN=http://localhost:5173
+      - EXEC_SERVICE_URL=http://exec-service:4000
+      - EXEC_SERVICE_SECRET=${EXEC_SERVICE_SECRET:-change-me-in-production}
+    depends_on:
+      - mongo
+      - redis
+      - exec-service
+
+  exec-service:
+    build:
+      context: ./ExecService
+      dockerfile: Dockerfile.service
+    ports:
+      - "4000:4000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - EXEC_SERVICE_SECRET=${EXEC_SERVICE_SECRET:-change-me-in-production}
+      - CONTAINER_MEMORY_MB=256
+      - CONTAINER_CPU_QUOTA=50000
+      - CONTAINER_TIMEOUT_MS=30000
+      - CONTAINER_IDLE_TTL_MS=300000
+    privileged: false
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  client:
+    build:
+      context: ./Client
+      args:
+        - VITE_API_URL=http://localhost:3000
+    ports:
+      - "5173:80"
+    depends_on:
+      - server

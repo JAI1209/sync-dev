@@ -6,20 +6,14 @@ import { describe, expect, it } from "vitest";
 const source = readFileSync(join(cwd(), "src", "components", "RunTerminal.jsx"), "utf8");
 
 describe("RunTerminal source safeguards", () => {
-  it("SharedArrayBuffer unavailable sets descriptive error before WebContainer boot", () => {
-    expect(source).toContain("SharedArrayBuffer is unavailable");
-    expect(source).toContain('typeof SharedArrayBuffer === "undefined"');
+  it("uses socket-driven Docker execution", () => {
+    expect(source).toContain('"run-code"');
+    expect(source).toContain('"run-output"');
+    expect(source).toContain('"kill-run"');
   });
 
-  it("shell process exit sets crashed phase and shows restart button", () => {
-    expect(source).toContain("shellProc.exit.then");
-    expect(source).toContain('setWcPhase("crashed")');
-    expect(source).toContain("Restart shell");
-  });
-
-  it("server-ready event sets previewUrl and shows preview controls", () => {
-    expect(source).toContain('wc.on("server-ready"');
-    expect(source).toContain("setPreviewUrl(url)");
-    expect(source).toContain("Toggle inline preview");
+  it("blocks viewer role from starting runs", () => {
+    expect(source).toContain('userRole !== "viewer"');
+    expect(source).toContain("Viewer role cannot run code.");
   });
 });

@@ -2563,6 +2563,30 @@ button {
   outline-offset: 2px;
 }
 
+.run-terminal__select,
+.run-terminal__command {
+  min-height: 28px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+
+.run-terminal__select {
+  padding: 3px 8px;
+}
+
+.run-terminal__command {
+  width: min(280px, 40vw);
+  padding: 3px 8px;
+}
+
+.run-terminal__select:disabled,
+.run-terminal__command:disabled {
+  opacity: 0.55;
+}
+
 .run-terminal__hint {
   margin-left: auto;
   font-size: 10px;

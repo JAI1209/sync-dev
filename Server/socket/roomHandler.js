@@ -5,6 +5,7 @@ const Snapshot = require("../models/Snapshot");
 const User = require("../models/User");
 const { checkSocketPermission, ensureRoomMembership, ROLE_HIERARCHY } = require("../middleware/rbac");
 const { importRepoFromGitHub } = require("../services/githubRepoImport");
+const { streamExec, destroyRoomContainer } = require("../services/execService");
 const { extToLanguage } = require("../utils/extToLanguage");
 const AUTO_JOIN_VIEWER = String(process.env.RBAC_AUTO_JOIN_VIEWER || "true").toLowerCase() !== "false";
 
@@ -475,6 +476,66 @@ async function handleGetFilePage(io, socket, { roomId, offset = 0, limit = 100 }
   }
 }
 
+async function handleRunCode(io, socket, { roomId, command, language } = {}) {
+  if (!roomId) return;
+
+  const perm = await checkSocketPermission(socket, roomId, "EXECUTE_CODE");
+  if (!perm.allowed) {
+    emitPermissionDenied(socket, roomId, "EXECUTE_CODE", perm);
+    return;
+  }
+
+  const room = await roomService.getRoom(roomId);
+  if (!room) {
+    socket.emit("run-output", { type: "stderr", payload: "[Error] Room not found\r\n" });
+    return;
+  }
+
+  const files = {};
+  for (const file of Object.values(room.files || {})) {
+    if (!file?.name) continue;
+    files[buildFilePath(file, room.folders || {})] = file.content || "";
+  }
+
+  socket.emit("run-started", { roomId });
+
+  try {
+    await streamExec({
+      roomId,
+      files,
+      command: command || inferCommand(room, language),
+      language: language || "javascript",
+      onChunk({ type, payload }) {
+        io.to(roomId).emit("run-output", { type, payload });
+      },
+    });
+  } catch (err) {
+    socket.emit("run-output", {
+      type: "stderr",
+      payload: `\r\n[SyncDev] Execution failed: ${err.message}\r\n`,
+    });
+  } finally {
+    io.to(roomId).emit("run-finished", { roomId });
+  }
+}
+
+async function handleKillRun(io, socket, { roomId } = {}) {
+  if (!roomId) return;
+
+  const perm = await checkSocketPermission(socket, roomId, "EXECUTE_CODE");
+  if (!perm.allowed) {
+    emitPermissionDenied(socket, roomId, "EXECUTE_CODE", perm);
+    return;
+  }
+
+  await destroyRoomContainer(roomId);
+  io.to(roomId).emit("run-output", {
+    type: "stderr",
+    payload: "\r\n[SyncDev] Run killed.\r\n",
+  });
+  io.to(roomId).emit("run-finished", { roomId });
+}
+
 function handleRetryUpload(io, socket) {
   socket.emit("upload-retry-ack");
 }
@@ -496,6 +557,7 @@ async function handleLeaveRoom(io, socket, { roomId } = {}) {
       if (room.users.length === 0) {
         roomService.persistRoom(targetRoomId);
         roomService.scheduleRoomCleanup(targetRoomId);
+        await destroyRoomContainer(targetRoomId);
       }
     }
 
@@ -536,6 +598,7 @@ async function handleTerminateRoom(io, socket, { roomId }) {
       Snapshot.deleteMany({ roomId }),
     ]);
     await roomService.destroyRoom(roomId);
+    await destroyRoomContainer(roomId);
 
     setTimeout(() => {
       socketsInRoom.forEach((participant) => {
@@ -648,9 +711,42 @@ async function handleDisconnect(io, socket) {
     if (room.users.length === 0) {
       roomService.persistRoom(roomId);
       roomService.scheduleRoomCleanup(roomId);
+      await destroyRoomContainer(roomId);
     }
   }
   console.log("user disconnected:", socket.id);
+}
+
+function buildFilePath(file, folders = {}) {
+  const parts = [file.name];
+  let parentId = file.parentId;
+  let depth = 0;
+  const visited = new Set();
+
+  while (parentId && folders[parentId] && depth < 50 && !visited.has(parentId)) {
+    visited.add(parentId);
+    depth += 1;
+    const folder = folders[parentId];
+    parts.unshift(folder.name);
+    parentId = folder.parentId;
+  }
+
+  return parts.join("/");
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+function inferCommand(room, language) {
+  const lang = String(language || "javascript").toLowerCase();
+  const activeFile = room?.activeFile ? room.files?.[room.activeFile] : null;
+  const activePath = activeFile ? shellQuote(buildFilePath(activeFile, room.folders || {})) : null;
+
+  if (lang === "python") return `python3 ${activePath || "main.py"}`;
+  if (lang === "shell") return `sh ${activePath || "entrypoint.sh"}`;
+  if (lang === "typescript" || lang === "tsx") return `node ${activePath || "index.js"}`;
+  return `node ${activePath || "index.js"}`;
 }
 
 function registerRoomHandlers(io, socket) {
@@ -674,6 +770,8 @@ function registerRoomHandlers(io, socket) {
   socket.on("bulk-import", (data) => handleBulkImport(io, socket, data));
   socket.on("start-github-import", (data) => handleStartGithubImport(io, socket, data));
   socket.on("get-file-page", (data) => handleGetFilePage(io, socket, data));
+  socket.on("run-code", (data) => handleRunCode(io, socket, data));
+  socket.on("kill-run", (data) => handleKillRun(io, socket, data));
   socket.on("leave-room", (data) => handleLeaveRoom(io, socket, data));
   socket.on("terminate-room", (data) => handleTerminateRoom(io, socket, data));
   socket.on("change-role", (data) => handleChangeRole(io, socket, data));
@@ -692,6 +790,10 @@ module.exports = {
     handleBulkImport,
     handleStartGithubImport,
     handleGetFilePage,
+    handleRunCode,
+    handleKillRun,
+    buildFilePath,
+    inferCommand,
     handleSwitchFile,
   },
 };

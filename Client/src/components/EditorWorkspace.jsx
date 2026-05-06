@@ -34,8 +34,8 @@ export default function EditorWorkspace({
   handleEditorMount,
   monacoOptions,
   terminalOpen,
-  getRunCode,
   activeFile,
+  socketRef,
   editorNotification,
   onSnapshotRestored,
 }) {
@@ -141,12 +141,11 @@ export default function EditorWorkspace({
                 }
               >
                 <RunTerminal
-                  getCode={getRunCode}
+                  socketRef={socketRef}
+                  roomId={roomId}
                   language={activeFile?.language}
                   fileName={activeFile?.name}
-                  activeFileId={activeFileId}
-                  files={files}
-                  folders={folders}
+                  userRole={userRole}
                   disabled={!joined}
                 />
               </Suspense>

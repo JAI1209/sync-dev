@@ -13,7 +13,6 @@ export default defineConfig(({ mode }) => {
         output: {
           manualChunks(id) {
             if (id.includes('node_modules')) {
-              if (id.includes('@webcontainer')) return 'vendor-webcontainer'
               if (id.includes('@xterm')) return 'vendor-xterm'
             }
           },
@@ -23,22 +22,11 @@ export default defineConfig(({ mode }) => {
     server: {
       host: true,
       allowedHosts: true,
-      headers: {
-        // FIX: WebContainers require SharedArrayBuffer, so dev must send COOP/COEP headers.
-        'Cross-Origin-Embedder-Policy': 'require-corp',
-        'Cross-Origin-Opener-Policy': 'same-origin',
-      },
       proxy: {
         '/api': {
           target: apiTarget,
           changeOrigin: true,
         },
-      },
-    },
-    preview: {
-      headers: {
-        'Cross-Origin-Embedder-Policy': 'require-corp',
-        'Cross-Origin-Opener-Policy': 'same-origin',
       },
     },
   }

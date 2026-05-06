@@ -388,12 +388,6 @@ export default function Editor({ username }) {
     }
   };
 
-  const getRunCode = useCallback(() => {
-    const file = activeFile;
-    if (!file) return "";
-    return file.content || "";
-  }, [activeFile]);
-
   return (
     <div className="editor-wrapper">
       <EditorHeader
@@ -448,8 +442,8 @@ export default function Editor({ username }) {
         handleEditorMount={handleEditorMount}
         monacoOptions={monacoOptions}
         terminalOpen={terminalOpen}
-        getRunCode={getRunCode}
         activeFile={activeFile}
+        socketRef={socketRef}
         editorNotification={editorNotification}
         onSnapshotRestored={handleSnapshotRestored}
       />
