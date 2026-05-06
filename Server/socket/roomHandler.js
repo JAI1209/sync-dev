@@ -745,7 +745,7 @@ function inferCommand(room, language) {
 
   if (lang === "python") return `python3 ${activePath || "main.py"}`;
   if (lang === "shell") return `sh ${activePath || "entrypoint.sh"}`;
-  if (lang === "typescript" || lang === "tsx") return `node ${activePath || "index.js"}`;
+  if (lang === "typescript" || lang === "tsx") return `npx --yes tsx ${activePath || "index.ts"}`;
   return `node ${activePath || "index.js"}`;
 }
 

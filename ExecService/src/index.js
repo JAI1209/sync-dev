@@ -8,12 +8,16 @@ const runner = require("./runner");
 const { startIdleCleanup } = require("./cleanup");
 
 const app = express();
-const INTERNAL_SECRET = process.env.INTERNAL_SECRET || process.env.EXEC_SERVICE_SECRET;
+const INTERNAL_SECRET = process.env.EXEC_SERVICE_SECRET;
 
 app.use(express.json({ limit: "32mb" }));
 
 app.use((req, res, next) => {
-  if (!INTERNAL_SECRET || req.headers["x-internal-secret"] !== INTERNAL_SECRET) {
+  if (!INTERNAL_SECRET) {
+    console.error("[ExecService] EXEC_SERVICE_SECRET is not set. Refusing all requests.");
+    return res.status(500).json({ error: "Server misconfiguration: secret not set" });
+  }
+  if (req.headers["x-internal-secret"] !== INTERNAL_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();
@@ -21,8 +25,8 @@ app.use((req, res, next) => {
 
 app.post("/execute", async (req, res) => {
   const { roomId, files, command, language } = req.body;
-  if (!roomId || !files || !command) {
-    return res.status(400).json({ error: "roomId, files, and command are required" });
+  if (!roomId || !files) {
+    return res.status(400).json({ error: "roomId and files are required" });
   }
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -34,6 +38,16 @@ app.post("/execute", async (req, res) => {
   const send = (type, payload) => {
     res.write(`data: ${JSON.stringify({ type, payload, requestId })}\n\n`);
   };
+
+  if (!command) {
+    send(
+      "stderr",
+      "\r\n[SyncDev] No run command provided.\r\nEnter a command in the toolbar or open a runnable file.\r\n"
+    );
+    res.write("data: [DONE]\n\n");
+    res.end();
+    return;
+  }
 
   try {
     const container = await pool.getOrCreate(roomId, language);
