@@ -1,6 +1,9 @@
 const Docker = require("dockerode");
 
-const docker = new Docker({ socketPath: process.env.DOCKER_SOCKET || "/var/run/docker.sock" });
+const socketPath = process.env.DOCKER_SOCKET || "/var/run/docker.sock";
+const docker = socketPath.startsWith("tcp://")
+  ? new Docker({ host: "localhost", port: 2375, protocol: "http" })
+  : new Docker({ socketPath });
 
 const MEMORY_MB = Number(process.env.CONTAINER_MEMORY_MB || 256);
 const CPU_QUOTA = Number(process.env.CONTAINER_CPU_QUOTA || 50000);
