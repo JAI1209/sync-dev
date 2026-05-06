@@ -55,19 +55,28 @@ app.use(express.json({ limit: "32mb" }));
 app.set("terminalSessions", terminalSessions);
 
 app.use("/preview/:roomId", (req, res, next) => {
-  const session = terminalSessions.get(req.params.roomId);
-  if (!session) return res.status(404).send("No preview available for this room");
-  if (!session.previewToken || req.query.token !== session.previewToken) {
-    return res.status(401).send("Unauthorized");
+  const { roomId } = req.params;
+  const session = terminalSessions.get(roomId);
+
+  const token = req.query.token || req.headers["x-preview-token"];
+  if (!session || token !== session.previewToken) {
+    return res.status(403).send("Forbidden");
   }
-  const proxy = createProxyMiddleware({
-    target: `http://localhost:${session.previewPort}`,
+
+  const port = session.previewPort;
+  if (!port) return res.status(503).send("Preview not ready");
+
+  createProxyMiddleware({
+    target: `http://localhost:${port}`,
     changeOrigin: true,
-    pathRewrite: { [`^/preview/${req.params.roomId}`]: "" },
     ws: true,
-    on: { error: (_err, _req, response) => response.status(502).send("Preview not ready — start your dev server first") },
-  });
-  proxy(req, res, next);
+    pathRewrite: { [`^/preview/${roomId}`]: "" },
+    on: {
+      error: (_err, _req, proxyRes) => {
+        proxyRes.status(502).send("Preview unavailable");
+      },
+    },
+  })(req, res, next);
 });
 
 

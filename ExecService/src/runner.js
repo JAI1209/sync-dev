@@ -42,7 +42,6 @@ async function exec(container, files, command, { send }) {
     AttachStdout: true,
     AttachStderr: true,
     WorkingDir: "/workspace",
-    User: "sandbox",
   });
 
   const stream = await processExec.start({ hijack: true, stdin: false });
