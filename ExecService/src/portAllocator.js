@@ -15,6 +15,10 @@ function isPortFree(port) {
   });
 }
 
+/**
+ * Allocate an available sandbox port from the configured range.
+ * @returns {Promise<number>}
+ */
 async function allocatePort() {
   for (let p = MIN_PORT; p <= MAX_PORT; p += 1) {
     const reserved = await redis.sismember(PORT_KEY, p);

@@ -43,6 +43,13 @@ async function isRunning(container) {
   }
 }
 
+/**
+ * Get or create a sandbox container for a room.
+ * Reuses existing running container if image matches.
+ * @param {string} roomId
+ * @param {string} language
+ * @returns {Promise<import("dockerode").Container>}
+ */
 async function getOrCreate(roomId, language = "javascript") {
   const image = imageForLanguage(language);
 

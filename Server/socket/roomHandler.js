@@ -114,6 +114,10 @@ async function handleJoinRoom(io, socket, { roomId }) {
 async function handleFileChange(io, socket, { roomId, fileId, content }) {
   try {
     const nextContent = typeof content === "string" ? content : "";
+    if (typeof nextContent === "string" && nextContent.length > 5 * 1024 * 1024) {
+      socket.emit("operation-error", { msg: "File content exceeds 5MB limit" });
+      return;
+    }
     console.log(`[Socket] file-change received from ${socket.username}: ${fileId} (${nextContent.length} chars)`);
     const perm = await checkSocketPermission(socket, roomId, "EDIT_FILES");
     if (!perm.allowed) {
@@ -144,6 +148,9 @@ async function handleFileChange(io, socket, { roomId, fileId, content }) {
 }
 
 async function handleYjsUpdate(io, socket, { roomId, fileId, update }) {
+  if (update && update.length > 1 * 1024 * 1024) {
+    return;
+  }
   const perm = await checkSocketPermission(socket, roomId, "EDIT_FILES");
   if (!perm.allowed) {
     emitPermissionDenied(socket, roomId, "EDIT_FILES", perm);
@@ -553,6 +560,24 @@ async function handleKillRun(io, socket, { roomId } = {}) {
 
 async function handleStartTerminal(io, socket, { roomId, language } = {}) {
   if (!roomId) return;
+
+  const perm = await checkSocketPermission(socket, roomId, "EXECUTE_CODE");
+  if (!perm.allowed) {
+    emitPermissionDenied(socket, roomId, "EXECUTE_CODE", perm);
+    return;
+  }
+
+  const rateLimitKey = `terminal:ratelimit:${socket.userId}`;
+  const ready = await ensureRedisConnection();
+  if (ready) {
+    const count = await redis.incr(rateLimitKey);
+    if (count === 1) await redis.expire(rateLimitKey, 60);
+    if (count > 3) {
+      socket.emit("operation-error", { msg: "Too many terminal sessions. Wait 1 minute." });
+      return;
+    }
+  }
+
   const startRes = await fetch(`${EXEC_URL}/terminal/start`, {
     method: "POST",
     headers: {
@@ -575,7 +600,12 @@ async function handleStartTerminal(io, socket, { roomId, language } = {}) {
 
   ptyWs.on("open", async () => {
     const room = await roomService.getRoom(roomId);
-    ptyWs.send(JSON.stringify({ type: "init", files: room?.files || {}, cols: 120, rows: 30 }));
+    const files = {};
+    for (const file of Object.values(room?.files || {})) {
+      if (!file?.name) continue;
+      files[buildFilePath(file, room.folders || {})] = file.content || "";
+    }
+    ptyWs.send(JSON.stringify({ type: "init", files, cols: 120, rows: 30 }));
   });
 
   ptyWs.on("message", (data) => {
@@ -629,4 +659,98 @@ function handleCursorMove(_io, socket, { roomId, fileId, position } = {}) {
   socket.to(roomId).emit("cursor-update", { socketId: socket.id, username: socket.username, fileId, position });
 }
 
+
+async function handleLeaveRoom(io, socket, { roomId } = {}) {
+  const rid = roomId || socket.roomId;
+  if (!rid) return;
+  socket.leave(rid);
+  const room = await roomService.getRoom(rid);
+  if (room?.users) {
+    room.users = room.users.filter((u) => u.socketId !== socket.id);
+    await roomService.setRoom(rid, room);
+    io.to(rid).emit("users-update", room.users);
+    if (room.users.length === 0) roomService.scheduleRoomCleanup(rid);
+  }
+}
+
+async function handleTerminateRoom(io, socket, { roomId } = {}) {
+  if (!roomId) return;
+  const perm = await checkSocketPermission(socket, roomId, "TERMINATE_ROOM");
+  if (!perm.allowed) {
+    emitPermissionDenied(socket, roomId, "TERMINATE_ROOM", perm);
+    return;
+  }
+  await roomService.destroyRoom(roomId);
+  io.to(roomId).emit("room-terminated", { roomId });
+}
+
+async function handleChangeRole(io, socket, { roomId } = {}) {
+  const perm = await checkSocketPermission(socket, roomId, "MANAGE_ROLES");
+  if (!perm.allowed) emitPermissionDenied(socket, roomId, "MANAGE_ROLES", perm);
+}
+
+function handleRetryUpload() {}
+function handleWebrtcOffer(io, socket, data = {}) { socket.to(data.roomId).emit("webrtc-offer", { ...data, socketId: socket.id }); }
+function handleWebrtcAnswer(io, socket, data = {}) { socket.to(data.roomId).emit("webrtc-answer", { ...data, socketId: socket.id }); }
+function handleWebrtcIceCandidate(io, socket, data = {}) { socket.to(data.roomId).emit("webrtc-ice-candidate", { ...data, socketId: socket.id }); }
+function handleWebrtcEndCall(io, socket, { roomId } = {}) { socket.to(roomId).emit("webrtc-end-call", { socketId: socket.id }); }
+async function handleDisconnect(io, socket) { await handleLeaveRoom(io, socket, { roomId: socket.roomId }); }
+
+function registerRoomHandlers(io, socket) {
+  const username = socket.auth?.user?.username || "anonymous";
+
+  if (process.env.NODE_ENV !== "production") {
+    socket.onAny((event) => {
+      console.log(`[DEBUG] Event "${event}" from ${username}`);
+    });
+  }
+
+  const sh = (fn) => socketHandler(io, socket, fn);
+
+  socket.on("join-room",            sh(handleJoinRoom));
+  socket.on("file-change",          sh(handleFileChange));
+  socket.on("yjs-update",           sh(handleYjsUpdate));
+  socket.on("create-file",          sh(handleCreateFile));
+  socket.on("create-folder",        sh(handleCreateFolder));
+  socket.on("rename-file",          sh(handleRenameFile));
+  socket.on("rename-folder",        sh(handleRenameFolder));
+  socket.on("delete-file",          sh(handleDeleteFile));
+  socket.on("delete-folder",        sh(handleDeleteFolder));
+  socket.on("switch-file",          sh(handleSwitchFile));
+  socket.on("bulk-import",          sh(handleBulkImport));
+  socket.on("start-github-import",  sh(handleStartGithubImport));
+  socket.on("get-file-page",        sh(handleGetFilePage));
+  socket.on("run-code",             sh(handleRunCode));
+  socket.on("kill-run",             sh(handleKillRun));
+  socket.on("start-terminal",       sh(handleStartTerminal));
+  socket.on("terminal-input",       sh(handleTerminalInput));
+  socket.on("terminal-resize",      sh(handleTerminalResize));
+  socket.on("stop-terminal",        sh(handleStopTerminal));
+  socket.on("get-exec-history",     sh(handleGetExecHistory));
+  socket.on("cursor-move",          sh(handleCursorMove));
+  socket.on("kill-run",             sh(handleKillRun));
+  socket.on("leave-room",           sh(handleLeaveRoom));
+  socket.on("terminate-room",       sh(handleTerminateRoom));
+  socket.on("change-role",          sh(handleChangeRole));
+  socket.on("retry-upload",         sh(handleRetryUpload));
+  socket.on("webrtc-offer",         sh(handleWebrtcOffer));
+  socket.on("webrtc-answer",        sh(handleWebrtcAnswer));
+  socket.on("webrtc-ice-candidate", sh(handleWebrtcIceCandidate));
+  socket.on("webrtc-end-call",      sh(handleWebrtcEndCall));
+  socket.on("disconnect",           () => handleDisconnect(io, socket));
+}
+
+module.exports = {
+  registerRoomHandlers,
+  handleJoinRoom,
+  handleRunCode,
+  handleStartTerminal,
+  inferCommand,
+  buildFilePath,
+};
+  const totalSize = Object.values(files || {}).reduce((sum, f) => sum + (f?.content?.length || 0), 0);
+  if (totalSize > 10 * 1024 * 1024) {
+    socket.emit("operation-error", { msg: "Import exceeds 10MB total size limit" });
+    return;
+  }
 

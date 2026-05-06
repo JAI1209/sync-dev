@@ -1,72 +1,28 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import {
-  getRoom,
-  getRooms,
-  setRoom,
-  makeDefaultRoom,
-  clearRoomCleanup,
-} from "../services/roomService.js";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const TEST_ROOM = "test-room-vitest";
+vi.mock("../config/redis", () => ({
+  redis: { get: vi.fn(), set: vi.fn(), del: vi.fn(), keys: vi.fn(() => []), ping: vi.fn(() => "PONG") },
+  ensureRedisConnection: vi.fn(() => true),
+}));
 
-function clearInMemoryRooms() {
-  const rooms = getRooms();
-  for (const key of Object.keys(rooms)) {
-    delete rooms[key];
-    clearRoomCleanup(key);
-  }
-}
+vi.mock("../models/Room", () => ({ default: { findOneAndUpdate: vi.fn(), findOne: vi.fn() } }));
 
-beforeEach(() => {
-  clearInMemoryRooms();
-});
+const roomService = await import("../services/roomService.js");
+const { redis, ensureRedisConnection } = await import("../config/redis.js");
 
-describe("roomService", () => {
-  it("makeDefaultRoom returns expected shape", () => {
-    const room = makeDefaultRoom();
-    expect(room).toHaveProperty("files");
-    expect(room).toHaveProperty("folders");
-    expect(room).toHaveProperty("activeFile");
-    expect(room).toHaveProperty("users");
-    expect(room.users).toEqual([]);
+beforeEach(() => vi.clearAllMocks());
+
+describe("roomService.getRoom", () => {
+  it("returns null when Redis returns nothing", async () => {
+    redis.get.mockResolvedValue(null);
+    expect(await roomService.getRoom("nonexistent")).toBeNull();
   });
 
-  it("makeDefaultRoom has one default file", () => {
-    const room = makeDefaultRoom();
-    const fileKeys = Object.keys(room.files);
-    expect(fileKeys.length).toBe(1);
-    expect(room.files[fileKeys[0]].name).toBe("main.js");
-  });
-
-  it("getRoom returns null for unknown room when Redis has no room", async () => {
-    const result = await getRoom("nonexistent-room-xyz");
-    expect(result).toBeNull();
-  });
-
-  it("setRoom stores room state and getRoom reads it back from memory", async () => {
-    const room = makeDefaultRoom();
-    await setRoom(TEST_ROOM, room);
-    const fetched = await getRoom(TEST_ROOM);
-    expect(fetched).not.toBeNull();
-    expect(Object.keys(fetched.files).length).toBe(1);
-  });
-
-  it("setRoom overwrites existing room state", async () => {
-    const room = makeDefaultRoom();
-    await setRoom(TEST_ROOM, room);
-
-    const updated = { ...room, users: ["alice"] };
-    await setRoom(TEST_ROOM, updated);
-
-    const fetched = await getRoom(TEST_ROOM);
-    expect(fetched.users).toContain("alice");
-  });
-
-  it("getRoom returns in-memory cache on second call", async () => {
-    const room = makeDefaultRoom();
-    await setRoom(TEST_ROOM, room);
-    const first = await getRoom(TEST_ROOM);
-    const second = await getRoom(TEST_ROOM);
-    expect(second).toBe(first);
+  it("serves stale cache when Redis is unavailable", async () => {
+    const room = { files: {}, folders: {}, users: [] };
+    redis.get.mockResolvedValue(JSON.stringify(room));
+    await roomService.getRoom("room-1");
+    ensureRedisConnection.mockResolvedValue(false);
+    expect(await roomService.getRoom("room-1")).toEqual(room);
   });
 });

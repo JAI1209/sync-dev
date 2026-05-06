@@ -57,12 +57,15 @@ app.set("terminalSessions", terminalSessions);
 app.use("/preview/:roomId", (req, res, next) => {
   const session = terminalSessions.get(req.params.roomId);
   if (!session) return res.status(404).send("No preview available for this room");
+  if (!session.previewToken || req.query.token !== session.previewToken) {
+    return res.status(401).send("Unauthorized");
+  }
   const proxy = createProxyMiddleware({
-    target: `http://localhost:${session.previewPort || session.port}`,
+    target: `http://localhost:${session.previewPort}`,
     changeOrigin: true,
     pathRewrite: { [`^/preview/${req.params.roomId}`]: "" },
     ws: true,
-    on: { error: (_err, _req, response) => response.status(502).send("Preview not ready yet — start your dev server first") },
+    on: { error: (_err, _req, response) => response.status(502).send("Preview not ready — start your dev server first") },
   });
   proxy(req, res, next);
 });
