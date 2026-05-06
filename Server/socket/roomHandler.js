@@ -7,6 +7,11 @@ const { checkSocketPermission, ensureRoomMembership, ROLE_HIERARCHY } = require(
 const { importRepoFromGitHub } = require("../services/githubRepoImport");
 const { streamExec, destroyRoomContainer } = require("../services/execService");
 const { extToLanguage } = require("../utils/extToLanguage");
+const WebSocket = require("ws");
+const EXEC_URL = process.env.EXEC_SERVICE_URL || "http://localhost:4000";
+const EXEC_SECRET = process.env.EXEC_SERVICE_SECRET || "change-me-in-production";
+const terminalSockets = new Map();
+
 const AUTO_JOIN_VIEWER = String(process.env.RBAC_AUTO_JOIN_VIEWER || "true").toLowerCase() !== "false";
 
 function emitPermissionDenied(socket, roomId, permission, details = {}) {
@@ -536,6 +541,20 @@ async function handleKillRun(io, socket, { roomId } = {}) {
   io.to(roomId).emit("run-finished", { roomId });
 }
 
+
+async function handleStartTerminal(io, socket, { roomId, language } = {}) {
+ if (!roomId) return; const perm = await checkSocketPermission(socket, roomId, "EXECUTE_CODE"); if (!perm.allowed) return emitPermissionDenied(socket, roomId, "EXECUTE_CODE", perm);
+ const room = await roomService.getRoom(roomId); if (!room) return; const files = {}; for (const file of Object.values(room.files || {})) { if (!file?.name) continue; files[buildFilePath(file, room.folders || {})] = file.content || ""; }
+ try { const startRes = await fetch(`${EXEC_URL}/terminal/start`, { method:"POST", headers:{"Content-Type":"application/json","x-internal-secret":EXEC_SECRET}, body: JSON.stringify({ roomId, language: language || "javascript" })});
+ if (!startRes.ok) throw new Error(await startRes.text()); const { port } = await startRes.json(); const wsUrl = `${EXEC_URL.replace("http", "ws")}/terminal/ws?roomId=${encodeURIComponent(roomId)}&secret=${encodeURIComponent(EXEC_SECRET)}`; const ptyWs = new WebSocket(wsUrl); terminalSockets.set(roomId, { port, ptyWs });
+ ptyWs.on("open", ()=>ptyWs.send(JSON.stringify({ type:"init", files, cols:120, rows:30 })));
+ ptyWs.on("message", (data)=>{ try { const msg = JSON.parse(data.toString()); if (msg.type==="ready") io.to(roomId).emit("terminal-ready", { roomId, previewUrl: `/preview/${roomId}/`}); else if (msg.type==="output") io.to(roomId).emit("terminal-output", { roomId, data: msg.data}); else if (msg.type==="exit") io.to(roomId).emit("terminal-exit", { roomId, code: msg.code}); } catch {} });
+ } catch (err) { socket.emit("terminal-output", { roomId, data:`\r\n[SyncDev] Failed to start terminal: ${err.message}\r\n` }); }
+}
+function handleTerminalInput(_io, socket, { roomId, data } = {}) { const term=terminalSockets.get(roomId); if (term?.ptyWs?.readyState===WebSocket.OPEN) term.ptyWs.send(JSON.stringify({type:"input",data})); }
+function handleTerminalResize(_io, socket, { roomId, cols, rows } = {}) { const term=terminalSockets.get(roomId); if (term?.ptyWs?.readyState===WebSocket.OPEN) term.ptyWs.send(JSON.stringify({type:"resize",cols,rows})); }
+async function handleStopTerminal(io, socket, { roomId } = {}) { const term=terminalSockets.get(roomId); if (term?.ptyWs) term.ptyWs.close(); await fetch(`${EXEC_URL}/terminal/${encodeURIComponent(roomId)}`, { method:"DELETE", headers:{"x-internal-secret":EXEC_SECRET} }).catch(()=>{}); terminalSockets.delete(roomId); io.to(roomId).emit("terminal-stopped", { roomId }); }
+
 function handleRetryUpload(io, socket) {
   socket.emit("upload-retry-ack");
 }
@@ -771,6 +790,10 @@ function registerRoomHandlers(io, socket) {
   socket.on("start-github-import", (data) => handleStartGithubImport(io, socket, data));
   socket.on("get-file-page", (data) => handleGetFilePage(io, socket, data));
   socket.on("run-code", (data) => handleRunCode(io, socket, data));
+  socket.on("start-terminal", (data) => handleStartTerminal(io, socket, data));
+  socket.on("terminal-input", (data) => handleTerminalInput(io, socket, data));
+  socket.on("terminal-resize", (data) => handleTerminalResize(io, socket, data));
+  socket.on("stop-terminal", (data) => handleStopTerminal(io, socket, data));
   socket.on("kill-run", (data) => handleKillRun(io, socket, data));
   socket.on("leave-room", (data) => handleLeaveRoom(io, socket, data));
   socket.on("terminate-room", (data) => handleTerminateRoom(io, socket, data));
