@@ -97,4 +97,4 @@ async function exec(container, files, command, { send }) {
   });
 }
 
-module.exports = { exec };
+module.exports = { exec, uploadFilesToContainer: uploadFiles };

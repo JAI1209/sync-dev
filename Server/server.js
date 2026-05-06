@@ -25,6 +25,7 @@ const { connectDB } = require("./config/db");
 const { disconnectRedis } = require("./config/redis");
 const { initSocket } = require("./socket");
 const roomService = require("./services/roomService");
+const { createProxyMiddleware } = require("http-proxy-middleware");
 
 const app = express();
 const server = http.createServer(app);
@@ -47,6 +48,23 @@ app.use(morganMiddleware);
 app.use(securityHeaders);
 app.use(sanitizeInput);
 app.use(express.json({ limit: "32mb" }));
+
+const terminalSessions = new Map();
+app.set("terminalSessions", terminalSessions);
+
+app.use("/preview/:roomId", (req, res, next) => {
+  const session = terminalSessions.get(req.params.roomId);
+  if (!session) return res.status(404).send("No preview available for this room");
+  const proxy = createProxyMiddleware({
+    target: `http://localhost:${session.port}`,
+    changeOrigin: true,
+    pathRewrite: { [`^/preview/${req.params.roomId}`]: "" },
+    ws: true,
+    on: { error: (_err, _req, response) => response.status(502).send("Preview not ready yet — start your dev server first") },
+  });
+  proxy(req, res, next);
+});
+
 
 // Rate limiting for auth routes (stricter)
 app.use("/api/auth/login", rateLimitMiddleware("login"));

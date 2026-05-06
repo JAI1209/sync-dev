@@ -289,3 +289,7 @@ MIT License
 ### REAL TIME ENGINEERING PLATFORM
 
 </div>
+
+
+## Security note for terminal preview ports
+Ports 3001–3999 are reserved for per-room sandbox previews and should not be exposed publicly in production. Route preview traffic through the Server `/preview/:roomId` proxy on an internal network.

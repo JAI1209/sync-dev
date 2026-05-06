@@ -23,14 +23,15 @@ services:
       dockerfile: Dockerfile.service
     ports:
       - "4000:4000"
+      - "3001-3999:3001-3999"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - EXEC_SERVICE_SECRET=${EXEC_SERVICE_SECRET:-change-me-in-production}
-      - CONTAINER_MEMORY_MB=256
-      - CONTAINER_CPU_QUOTA=50000
-      - CONTAINER_TIMEOUT_MS=30000
-      - CONTAINER_IDLE_TTL_MS=300000
+      - CONTAINER_MEMORY_MB=512
+      - CONTAINER_CPU_QUOTA=100000
+      - CONTAINER_TIMEOUT_MS=0
+      - CONTAINER_IDLE_TTL_MS=1800000
     privileged: false
 
   mongo:
