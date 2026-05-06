@@ -745,6 +745,58 @@ function registerRoomHandlers(io, socket) {
   socket.on("disconnect",           () => handleDisconnect(io, socket));
 }
 
+
+function buildFilePath(file, folders = {}) {
+  if (!file?.name) return "";
+
+  const segments = [file.name];
+  const seen = new Set();
+  let parentId = file.parentId;
+
+  while (parentId && !seen.has(parentId)) {
+    seen.add(parentId);
+    const folder = folders[parentId];
+    if (!folder) break;
+    if (folder.name) segments.unshift(folder.name);
+    parentId = folder.parentId;
+  }
+
+  return segments.join("/");
+}
+
+function inferCommand(room = {}, language = "javascript") {
+  const activeFile = room?.activeFile ? room?.files?.[room.activeFile] : null;
+  const activePath = activeFile ? buildFilePath(activeFile, room?.folders || {}) : "";
+  const lang = String(language || "javascript").toLowerCase();
+
+  switch (lang) {
+    case "typescript":
+      return activePath ? `npx ts-node ${activePath}` : "npx ts-node index.ts";
+    case "python":
+      return activePath ? `python3 ${activePath}` : "python3 main.py";
+    case "java":
+      return activePath ? `javac ${activePath} && java ${activePath.replace(/\.java$/i, "")}` : "javac  && java ";
+    case "cpp":
+    case "c":
+      return activePath ? `g++ -o out ${activePath} && ./out` : "g++ -o out  && ./out";
+    case "go":
+      return activePath ? `go run ${activePath}` : "go run main.go";
+    case "rust":
+      return "cargo run";
+    case "ruby":
+      return activePath ? `ruby ${activePath}` : "ruby main.rb";
+    case "php":
+      return activePath ? `php ${activePath}` : "php index.php";
+    case "shell":
+    case "sh":
+      return activePath ? `bash ${activePath}` : "bash run.sh";
+    case "javascript":
+    default:
+      return activePath ? `node ${activePath}` : "node index.js";
+  }
+}
+
+
 module.exports = {
   registerRoomHandlers,
   handleJoinRoom,
