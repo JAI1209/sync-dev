@@ -25,7 +25,10 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
   const [previewOpen, setPreviewOpen] = useState(true);
   const [scriptMode, setScriptMode] = useState(!isWebProject(files));
   const [socketConnected, setSocketConnected] = useState(false);
-  const hostRef = useRef(null); const termRef = useRef(null); const fitRef = useRef(null); const pendingInputRef = useRef([]);
+  const hostRef = useRef(null); const termRef = useRef(null); const fitRef = useRef(null); const pendingInputRef = useRef([]); const filesRef = useRef(files);
+
+
+  useEffect(() => { filesRef.current = files; }, [files]);
 
   useEffect(() => {
     const term = new Terminal({ cursorBlink: true, convertEol: true, theme: { background: "#050b12" } });
@@ -91,7 +94,7 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
       if (!term) return;
       if (typeof payload === "string" && payload.includes("__SYNCDEV_HTML_PREVIEW__:")) {
         const filePath = payload.split("__SYNCDEV_HTML_PREVIEW__:")[1]?.trim();
-        const fileContent = files?.[filePath] || files?.["index.html"] || "";
+        const fileContent = filesRef.current?.[filePath] || filesRef.current?.["index.html"] || "";
         // Revoke previous blob URL if it exists
         setPreviewUrl((prev) => {
           if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
@@ -115,7 +118,7 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
       setSocketConnected(false);
       s.off("terminal-ready", ready); s.off("terminal-output", out); s.off("terminal-exit", ex); s.off("terminal-stopped", stopped); s.off("run-output", runOut); s.off("run-started", runStarted); s.off("run-finished", runFinished);
     };
-  }, [roomId, socketRef, socketRef.current, files]);
+  }, [roomId, socketRef, socketRef.current]);
 
 
   useEffect(() => {
