@@ -1,8 +1,8 @@
 const Redis = require("ioredis");
 const net = require("net");
 
-const MIN_PORT = 3001;
-const MAX_PORT = 3999;
+const MIN_PORT = 20000;
+const MAX_PORT = 20999;
 const PORT_KEY = "execservice:allocated_ports";
 const allocatedPorts = new Set();
 
@@ -63,7 +63,7 @@ async function allocatePort() {
     return p;
   }
 
-  throw new Error("No free ports in range 3001–3999");
+  throw new Error("No free ports in range 20000–20999");
 }
 
 async function releasePort(port) {

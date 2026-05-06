@@ -35,22 +35,39 @@ app.post("/execute", async (req, res) => { /* unchanged behavior */
 });
 
 app.post('/terminal/start', async (req, res) => {
-  const { roomId, language } = req.body;
-  if (!roomId) return res.status(400).json({ error: 'roomId required' });
-  if (sessions.has(roomId)) return res.json({ ok: true, ports: sessions.get(roomId).ports, sessionId: sessions.get(roomId).sessionId });
-  const ports = { 3000: await allocatePort(), 5173: await allocatePort(), 8000: await allocatePort(), 8080: await allocatePort() };
-  const image = language === 'python' ? 'syncdev-sandbox:python312' : 'syncdev-sandbox:node20';
-  const container = await pool.docker.createContainer({
-    Image: image, Tty: true, AttachStdin: true, AttachStdout: true, AttachStderr: true, OpenStdin: true, Cmd: ['/bin/bash'], WorkingDir: '/workspace',
-    HostConfig: { Memory: 512 * 1024 * 1024, MemorySwap: 512 * 1024 * 1024, CpuQuota: 100000, CpuPeriod: 100000, NetworkMode: 'bridge', ReadonlyRootfs: false,
-      SecurityOpt: ['no-new-privileges'], CapDrop: ['ALL'], CapAdd: ['CHOWN', 'SETUID', 'SETGID'], PidsLimit: 256, AutoRemove: false,
-      PortBindings: { '3000/tcp': [{ HostPort: String(ports[3000]) }], '5173/tcp': [{ HostPort: String(ports[5173]) }], '8000/tcp': [{ HostPort: String(ports[8000]) }], '8080/tcp': [{ HostPort: String(ports[8080]) }] } },
-    ExposedPorts: { '3000/tcp': {}, '5173/tcp': {}, '8000/tcp': {}, '8080/tcp': {} },
-  });
-  await container.start();
-  const sessionId = uuidv4();
-  sessions.set(roomId, { sessionId, container, ports, ptyProcess: null });
-  res.json({ ok: true, ports, sessionId });
+  try {
+    const { roomId, language } = req.body;
+    if (!roomId) return res.status(400).json({ error: 'roomId required' });
+    if (sessions.has(roomId)) return res.json({ ok: true, ports: sessions.get(roomId).ports, sessionId: sessions.get(roomId).sessionId });
+
+    const image = language === 'python' ? 'syncdev-sandbox:python312' : 'syncdev-sandbox:node20';
+
+    while (true) {
+      const ports = { 3000: await allocatePort(), 5173: await allocatePort(), 8000: await allocatePort(), 8080: await allocatePort() };
+      try {
+        const container = await pool.docker.createContainer({
+          Image: image, Tty: true, AttachStdin: true, AttachStdout: true, AttachStderr: true, OpenStdin: true, Cmd: ['/bin/bash'], WorkingDir: '/workspace',
+          HostConfig: { Memory: 512 * 1024 * 1024, MemorySwap: 512 * 1024 * 1024, CpuQuota: 100000, CpuPeriod: 100000, NetworkMode: 'bridge', ReadonlyRootfs: false,
+            SecurityOpt: ['no-new-privileges'], CapDrop: ['ALL'], CapAdd: ['CHOWN', 'SETUID', 'SETGID'], PidsLimit: 256, AutoRemove: false,
+            PortBindings: { '3000/tcp': [{ HostPort: String(ports[3000]) }], '5173/tcp': [{ HostPort: String(ports[5173]) }], '8000/tcp': [{ HostPort: String(ports[8000]) }], '8080/tcp': [{ HostPort: String(ports[8080]) }] } },
+          ExposedPorts: { '3000/tcp': {}, '5173/tcp': {}, '8000/tcp': {}, '8080/tcp': {} },
+        });
+        await container.start();
+        const sessionId = uuidv4();
+        sessions.set(roomId, { sessionId, container, ports, ptyProcess: null });
+        return res.json({ ok: true, ports, sessionId });
+      } catch (err) {
+        const message = String(err?.message || '').toLowerCase();
+        if (message.includes('port is already allocated') || message.includes('address already in use')) {
+          continue;
+        }
+        Object.values(ports).forEach((port) => releasePort(port));
+        throw err;
+      }
+    }
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 app.delete('/terminal/:roomId', async (req, res) => {
@@ -64,12 +81,27 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 
 const PORT = Number(process.env.PORT || 4000);
 
+
+async function cleanupStaleContainers() {
+  const images = new Set(["syncdev-sandbox:node20", "syncdev-sandbox:python312"]);
+  const containers = await pool.docker.listContainers({ all: true });
+  const staleContainers = containers.filter((container) => images.has(container.Image));
+
+  for (const stale of staleContainers) {
+    try { await pool.docker.getContainer(stale.Id).stop(); } catch {}
+    try { await pool.docker.getContainer(stale.Id).remove({ force: true }); } catch {}
+  }
+
+  console.log(`[ExecService] cleaned up ${staleContainers.length} stale container(s)`);
+}
+
 async function prebuildImages() { /* unchanged */
   const images = [{ tag: 'syncdev-sandbox:node20', dockerfile: 'images/node20.Dockerfile' }, { tag: 'syncdev-sandbox:python312', dockerfile: 'images/python312.Dockerfile' }];
   for (const { tag, dockerfile } of images) { try { await pool.docker.getImage(tag).inspect(); } catch { const stream = await pool.docker.buildImage({ context: path.join(__dirname, '..'), src: [dockerfile] }, { t: tag, dockerfile }); await new Promise((resolve, reject) => pool.docker.modem.followProgress(stream, (err) => (err ? reject(err) : resolve()))); } }
 }
 
-prebuildImages().then(() => {
+prebuildImages().then(async () => {
+  await cleanupStaleContainers();
   startIdleCleanup();
   const httpServer = app.listen(PORT, () => console.log(`[ExecService] listening on :${PORT}`));
   const wss = new WebSocketServer({ server: httpServer, path: '/terminal/ws' });
@@ -94,7 +126,7 @@ prebuildImages().then(() => {
             ws.send(JSON.stringify({ type: 'ready', ports: session.ports }));
             return;
           }
-        } catch {}
+        } catch (err) { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'error', error: err.message })); }
       }
       try { const msg = JSON.parse(data.toString()); if (msg.type === 'input') session.ptyProcess?.write(msg.data); else if (msg.type === 'resize') session.ptyProcess?.resize(msg.cols, msg.rows); }
       catch { session.ptyProcess?.write(data.toString()); }
