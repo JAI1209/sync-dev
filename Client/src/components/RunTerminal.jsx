@@ -4,7 +4,10 @@ import { bundleWorkspaceHtml } from "../utils/inlineWorkspaceHtmlAssets";
 import { useTheme } from "../context/ThemeContext.jsx";
 
 const SHARED_ARRAY_BUFFER_ERROR =
-  "SharedArrayBuffer is unavailable. The server must send Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy headers.";
+  "SharedArrayBuffer is unavailable. The server must send Cross-Origin-Opener-Policy: same-origin " +
+  "and Cross-Origin-Embedder-Policy: require-corp headers on every response. " +
+  "If running locally, use 'npm run dev' (not 'node server.js' alone). " +
+  "If deployed, ensure your reverse proxy (nginx/Caddy) forwards these headers.";
 const NON_RUNNABLE = /\.(png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf|eot|bin|zip)$/i;
 
 function openHtmlInNewTab(html) {
@@ -84,6 +87,7 @@ export default function RunTerminal({ getCode, language, fileName, activeFileId,
   const registerServerReadyListener = useCallback((wc) => {
     serverReadyCleanupRef.current?.();
     const unsubscribe = wc.on("server-ready", (port, url) => {
+      if (wcRef.current !== wc) return;
       setPreviewUrl(url);
       setWcPhase("ready");
       termRef.current?.writeln(

@@ -31,7 +31,6 @@ export function useSocket({ roomId, navigate, fs, setEditorKey, setEditorNotific
   const socketRef = useRef(null);
   const debounceTimer = useRef(null);
   const pendingRemoteUpdates = useRef(new Set());
-  const importRetryCount = useRef(0);
   const attemptedSocketRefreshRef = useRef(false);
   const joinTimeoutRef = useRef(null);
 
@@ -43,27 +42,12 @@ export function useSocket({ roomId, navigate, fs, setEditorKey, setEditorNotific
   const [reconnecting, setReconnecting] = useState(false);
   const [lastConnectedAt, setLastConnectedAt] = useState(null);
 
-  const triggerImportRetry = useCallback(() => {
-    importRetryCount.current += 1;
-    if (importRetryCount.current > 10) {
-      console.error("[Import] Max retries exceeded");
-      sessionStorage.removeItem("syncdev_pending_import");
-      return;
-    }
-    setLastConnectedAt(Date.now());
-  }, []);
-
   const getFreshSocketToken = useCallback(async (forceRefresh = false) => {
     // FIX: Always refresh token before connecting to avoid stale JWT rejections.
     let token = getAccessToken();
     if (forceRefresh || !token || tokenNeedsRefresh(token)) {
       const refreshed = await refreshAccessToken();
       if (!refreshed) {
-        const hasPendingImport = Boolean(sessionStorage.getItem("syncdev_pending_import"));
-        if (hasPendingImport) {
-          setSocketIssue("Session expired. Refresh the page to reconnect and retry the import.");
-          return null;
-        }
         clearAuthTokens();
         navigate("/login");
         return null;
@@ -143,6 +127,7 @@ export function useSocket({ roomId, navigate, fs, setEditorKey, setEditorNotific
             roomId,
             files: pending.files || {},
             folders: pending.folders || {},
+            isLastChunk: true,
           });
           sessionStorage.removeItem("syncdev_pending_upload");
         } catch {
@@ -175,11 +160,6 @@ export function useSocket({ roomId, navigate, fs, setEditorKey, setEditorNotific
 
         if (attemptedSocketRefreshRef.current) {
           setReconnecting(false);
-          const hasPendingImport = Boolean(sessionStorage.getItem("syncdev_pending_import"));
-          if (hasPendingImport) {
-            setSocketIssue("Session expired. Refresh the page to reconnect and retry the import.");
-            return;
-          }
           clearAuthTokens();
           navigate("/login");
           return;
@@ -419,7 +399,6 @@ export function useSocket({ roomId, navigate, fs, setEditorKey, setEditorNotific
     setSocketIssue,
     reconnecting,
     handleReconnectSocket,
-    triggerImportRetry,
     lastConnectedAt,
     pendingRemoteUpdates,
     debounceTimer,

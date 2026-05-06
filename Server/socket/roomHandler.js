@@ -2,7 +2,9 @@ const roomService = require("../services/roomService");
 const Room = require("../models/Room");
 const RoomMember = require("../models/RoomMember");
 const Snapshot = require("../models/Snapshot");
+const User = require("../models/User");
 const { checkSocketPermission, ensureRoomMembership, ROLE_HIERARCHY } = require("../middleware/rbac");
+const { importRepoFromGitHub } = require("../services/githubRepoImport");
 const { extToLanguage } = require("../utils/extToLanguage");
 const AUTO_JOIN_VIEWER = String(process.env.RBAC_AUTO_JOIN_VIEWER || "true").toLowerCase() !== "false";
 
@@ -304,7 +306,7 @@ async function handleSwitchFile(io, socket, { roomId, fileId }) {
   roomService.persistRoom(roomId);
 }
 
-async function handleBulkImport(io, socket, { roomId, files, folders }) {
+async function handleBulkImport(io, socket, { roomId, files, folders, isLastChunk = true }) {
   try {
     const perm = await checkSocketPermission(socket, roomId, "IMPORT_FROM_GITHUB");
     if (!perm.allowed) {
@@ -318,19 +320,6 @@ async function handleBulkImport(io, socket, { roomId, files, folders }) {
     const room = await roomService.getRoom(roomId);
     if (!room) {
       socket.emit("import-error", { msg: "Room not found" });
-      return;
-    }
-
-    const incomingFileIds = Object.values(files || {})
-      .map((file) => file?.id)
-      .filter(Boolean);
-    const alreadyExistingCount = incomingFileIds.filter((fileId) => room.files[fileId]).length;
-    if (incomingFileIds.length > 0 && alreadyExistingCount === incomingFileIds.length) {
-      socket.emit("import-complete", {
-        filesImported: 0,
-        foldersImported: 0,
-        alreadyExists: true,
-      });
       return;
     }
 
@@ -364,6 +353,15 @@ async function handleBulkImport(io, socket, { roomId, files, folders }) {
       }
     }
 
+    if (isLastChunk && importedFiles.length === 0 && importedFolders.length === 0) {
+      socket.emit("import-complete", {
+        filesImported: 0,
+        foldersImported: 0,
+        alreadyExists: true,
+      });
+      return;
+    }
+
     await roomService.setRoom(roomId, room);
     await roomService.persistRoom(roomId);
 
@@ -374,13 +372,106 @@ async function handleBulkImport(io, socket, { roomId, files, folders }) {
       importedBy: socket.username,
     });
 
-    socket.emit("import-complete", {
-      filesImported: importedFiles.length,
-      foldersImported: importedFolders.length,
-    });
+    if (isLastChunk) {
+      socket.emit("import-complete", {
+        filesImported: importedFiles.length,
+        foldersImported: importedFolders.length,
+      });
+    }
   } catch (err) {
     console.error("[Import] Error:", err.message);
     socket.emit("import-error", { msg: "Import failed: " + err.message });
+  }
+}
+
+async function handleStartGithubImport(io, socket, { roomId, owner, repo, ref } = {}) {
+  try {
+    const perm = await checkSocketPermission(socket, roomId, "IMPORT_FROM_GITHUB");
+    if (!perm.allowed) {
+      socket.emit("import-error", { msg: "Import requires editor role or higher" });
+      return;
+    }
+
+    const room = await roomService.getRoom(roomId);
+    if (!room) {
+      socket.emit("import-error", { msg: "Room not found" });
+      return;
+    }
+
+    const onProgress = (message) => {
+      socket.emit("import-progress", { message });
+    };
+
+    onProgress("Fetching repo tree from GitHub...");
+
+    const user = await User.findById(socket.userId).select("+githubAccessToken githubTokenExpiry");
+    const token = user?.githubAccessToken || null;
+
+    const data = await importRepoFromGitHub({
+      owner,
+      repo,
+      ref: ref || undefined,
+      token,
+      onProgress,
+    });
+
+    onProgress(`Saving ${Object.keys(data.files).length} files to room...`);
+
+    room.files = room.files || {};
+    room.folders = room.folders || {};
+    Object.assign(room.files, data.files);
+    Object.assign(room.folders, data.folders);
+    await roomService.setRoom(roomId, room);
+    await roomService.persistRoom(roomId);
+
+    const fileCount = Object.keys(data.files).length;
+
+    io.to(roomId).emit("import-ready", {
+      fileCount,
+      meta: data.meta,
+      importedBy: socket.username,
+    });
+  } catch (err) {
+    console.error("[Import] Server-driven import failed:", err.message);
+    socket.emit("import-error", {
+      msg:
+        err.status === 401
+          ? "GitHub access denied. Reconnect your GitHub account."
+          : err.status === 404
+            ? "Repository not found. Check the owner/repo name and branch."
+            : "Import failed: " + err.message,
+    });
+  }
+}
+
+async function handleGetFilePage(io, socket, { roomId, offset = 0, limit = 100 } = {}) {
+  try {
+    const perm = await checkSocketPermission(socket, roomId, "VIEW_ROOM");
+    if (!perm.allowed) {
+      socket.emit("file-page-error", { msg: "Access denied" });
+      return;
+    }
+
+    const room = await roomService.getRoom(roomId);
+    if (!room) {
+      socket.emit("file-page-error", { msg: "Room not found" });
+      return;
+    }
+
+    const pageOffset = Math.max(0, Number(offset) || 0);
+    const pageLimit = Math.max(1, Math.min(Number(limit) || 100, 500));
+    const allFileEntries = Object.entries(room.files || {});
+    const page = Object.fromEntries(allFileEntries.slice(pageOffset, pageOffset + pageLimit));
+    const folders = pageOffset === 0 ? room.folders || {} : {};
+
+    socket.emit("file-page", {
+      files: page,
+      folders,
+      offset: pageOffset,
+      total: allFileEntries.length,
+    });
+  } catch (err) {
+    socket.emit("file-page-error", { msg: "Failed to fetch file page: " + err.message });
   }
 }
 
@@ -581,6 +672,8 @@ function registerRoomHandlers(io, socket) {
   socket.on("delete-folder", (data) => handleDeleteFolder(io, socket, data));
   socket.on("switch-file", (data) => handleSwitchFile(io, socket, data));
   socket.on("bulk-import", (data) => handleBulkImport(io, socket, data));
+  socket.on("start-github-import", (data) => handleStartGithubImport(io, socket, data));
+  socket.on("get-file-page", (data) => handleGetFilePage(io, socket, data));
   socket.on("leave-room", (data) => handleLeaveRoom(io, socket, data));
   socket.on("terminate-room", (data) => handleTerminateRoom(io, socket, data));
   socket.on("change-role", (data) => handleChangeRole(io, socket, data));
@@ -597,6 +690,8 @@ module.exports = {
   __testables: {
     handleFileChange,
     handleBulkImport,
+    handleStartGithubImport,
+    handleGetFilePage,
     handleSwitchFile,
   },
 };

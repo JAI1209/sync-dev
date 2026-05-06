@@ -64,10 +64,10 @@ function pathShouldSkip(relPath) {
 }
 
 /**
- * @param {{ owner: string, repo: string, ref?: string, token: string }} opts
+ * @param {{ owner: string, repo: string, ref?: string, token: string, onProgress?: (message: string) => void }} opts
  * @returns {Promise<{ files: object, folders: object, orderedFileIds: string[], skipped: string[], meta: object }>}
  */
-async function importRepoFromGitHub({ owner, repo, ref, token }) {
+async function importRepoFromGitHub({ owner, repo, ref, token, onProgress = () => {} }) {
   const files = {};
   const folders = {};
   const skipped = [];
@@ -113,76 +113,85 @@ async function importRepoFromGitHub({ owner, repo, ref, token }) {
 
   const blobs = (tree.tree || []).filter((e) => e.type === "blob" && e.path);
   const orderedFileIds = [];
+  onProgress(`Downloading ${blobs.length} files...`);
 
+  let done = 0;
   for (const entry of blobs) {
-    if (orderedFileIds.length >= GITHUB_MAX_FILE_COUNT) {
-      skipped.push(
-        `Import limit reached (${GITHUB_MAX_FILE_COUNT} files); additional matching files in the repo were not imported.`
-      );
-      break;
-    }
-
-    const relPath = entry.path;
-    const skipReason = pathShouldSkip(relPath);
-    if (skipReason) {
-      skipped.push(`${relPath.split("/").pop()} (${skipReason})`);
-      continue;
-    }
-
-    if (entry.size != null && entry.size > GITHUB_MAX_FILE_BYTES) {
-      skipped.push(`${relPath.split("/").pop()} (too large: ${Math.round(entry.size / 1024)}KB)`);
-      continue;
-    }
-
-    let blob;
     try {
-      blob = await ghFetchJson(
-        `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/blobs/${entry.sha}`,
-        token
-      );
-    } catch (e) {
-      skipped.push(`${relPath.split("/").pop()} (could not read: ${e.message})`);
-      continue;
+      if (orderedFileIds.length >= GITHUB_MAX_FILE_COUNT) {
+        skipped.push(
+          `Import limit reached (${GITHUB_MAX_FILE_COUNT} files); additional matching files in the repo were not imported.`
+        );
+        break;
+      }
+
+      const relPath = entry.path;
+      const skipReason = pathShouldSkip(relPath);
+      if (skipReason) {
+        skipped.push(`${relPath.split("/").pop()} (${skipReason})`);
+        continue;
+      }
+
+      if (entry.size != null && entry.size > GITHUB_MAX_FILE_BYTES) {
+        skipped.push(`${relPath.split("/").pop()} (too large: ${Math.round(entry.size / 1024)}KB)`);
+        continue;
+      }
+
+      let blob;
+      try {
+        blob = await ghFetchJson(
+          `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/blobs/${entry.sha}`,
+          token
+        );
+      } catch (e) {
+        skipped.push(`${relPath.split("/").pop()} (could not read: ${e.message})`);
+        continue;
+      }
+
+      if (blob.encoding !== "base64" || !blob.content) {
+        skipped.push(`${relPath.split("/").pop()} (non-text blob)`);
+        continue;
+      }
+
+      let content;
+      try {
+        content = Buffer.from(blob.content.replace(/\n/g, ""), "base64").toString("utf8");
+      } catch {
+        skipped.push(`${relPath.split("/").pop()} (decode error)`);
+        continue;
+      }
+
+      if (content.includes("\u0000")) {
+        skipped.push(`${relPath.split("/").pop()} (binary)`);
+        continue;
+      }
+
+      const pathParts = relPath.split("/").filter(Boolean);
+      const fileName = pathParts[pathParts.length - 1];
+      const dirParts = pathParts.slice(0, -1);
+
+      let parentId = null;
+      if (dirParts.length > 0) {
+        parentId = getOrCreateFolder(dirParts.join("/"));
+      }
+
+      const id = uid();
+      const repoPath = relPath.replace(/^\/+/, "");
+      files[id] = {
+        id,
+        name: fileName,
+        content,
+        language: extToLanguage(fileName),
+        parentId,
+        repoPath,
+      };
+      orderedFileIds.push(id);
+    } finally {
+      done++;
+      if (done % 50 === 0) {
+        onProgress(`Downloaded ${done}/${blobs.length} files...`);
+      }
     }
-
-    if (blob.encoding !== "base64" || !blob.content) {
-      skipped.push(`${relPath.split("/").pop()} (non-text blob)`);
-      continue;
-    }
-
-    let content;
-    try {
-      content = Buffer.from(blob.content.replace(/\n/g, ""), "base64").toString("utf8");
-    } catch {
-      skipped.push(`${relPath.split("/").pop()} (decode error)`);
-      continue;
-    }
-
-    if (content.includes("\u0000")) {
-      skipped.push(`${relPath.split("/").pop()} (binary)`);
-      continue;
-    }
-
-    const pathParts = relPath.split("/").filter(Boolean);
-    const fileName = pathParts[pathParts.length - 1];
-    const dirParts = pathParts.slice(0, -1);
-
-    let parentId = null;
-    if (dirParts.length > 0) {
-      parentId = getOrCreateFolder(dirParts.join("/"));
-    }
-
-    const id = uid();
-    const repoPath = relPath.replace(/^\/+/, "");
-    files[id] = {
-      id,
-      name: fileName,
-      content,
-      language: extToLanguage(fileName),
-      parentId,
-      repoPath,
-    };
-    orderedFileIds.push(id);
   }
 
   const meta = {

@@ -335,14 +335,29 @@ export default function Editor({ username }) {
         const totalChunks = Math.ceil(fileEntries.length / CHUNK_SIZE);
 
         if (totalChunks <= 1) {
-          socket.emit("bulk-import", { roomId, files: newFiles, folders: newFolders });
+          socket.emit("bulk-import", {
+            roomId,
+            files: newFiles,
+            folders: newFolders,
+            isLastChunk: true,
+          });
         } else {
           for (let i = 0; i < totalChunks; i++) {
+            if (!socket.connected) {
+              const remainingFiles = Object.fromEntries(fileEntries.slice(i * CHUNK_SIZE));
+              sessionStorage.setItem("syncdev_pending_upload", JSON.stringify({
+                roomId,
+                files: remainingFiles,
+                folders: i === 0 ? newFolders : {},
+              }));
+              break;
+            }
             const chunkFiles = Object.fromEntries(fileEntries.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE));
             socket.emit("bulk-import", {
               roomId,
               files: chunkFiles,
               folders: i === 0 ? newFolders : {},
+              isLastChunk: i === totalChunks - 1,
             });
             if (i < totalChunks - 1) {
               await new Promise((r) => setTimeout(r, 100));

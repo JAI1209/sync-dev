@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { commitGitHubRepo, importGitHubRepo } from "../api/github";
+import { commitGitHubRepo } from "../api/github";
 import JSZip from "jszip";
 
 export function parseGithubRepoInput(repoInput) {
@@ -44,18 +44,14 @@ export function useGitHub({ files, folders, roomId, socketRef, joined, loadFiles
   const [githubBusy, setGithubBusy] = useState(null);
   const [githubHint, setGithubHint] = useState("");
   const [importProgress, setImportProgress] = useState(null);
-  const importRetryCount = useRef(0);
-  const mountingRef = useRef(false);
   const loadFilesRef = useRef(loadFiles);
-  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
-    // FIX: Keep import confirmation using the latest loader without retriggering pending-import emits.
+    // Keep paged imports using the latest file loader.
     loadFilesRef.current = loadFiles;
   }, [loadFiles]);
 
   useEffect(() => {
-    mountingRef.current = false;
     try {
       const raw = sessionStorage.getItem(`syncdev_github_${roomId}`);
       if (raw) {
@@ -67,133 +63,6 @@ export function useGitHub({ files, folders, roomId, socketRef, joined, loadFiles
       /* ignore */
     }
   }, [roomId]);
-
-  useEffect(() => {
-    let cleanupListeners = null;
-    let confirmationTimer = null;
-    let retryTimer = null;
-
-    const scheduleRetry = (reason) => {
-      const retryIndex = importRetryCount.current;
-      if (retryIndex >= 10) {
-        // FIX: Clear stuck pending imports when the socket never reaches a joined state.
-        setGithubHint(
-          "Import failed after 10 retries - socket did not connect. Check your token and reload."
-        );
-        setImportProgress(null);
-        sessionStorage.removeItem("syncdev_pending_import");
-        importRetryCount.current = 0;
-        mountingRef.current = false;
-        return;
-      }
-
-      const delay = getImportRetryDelay(retryIndex);
-      const attemptNumber = retryIndex + 1;
-      importRetryCount.current += 1;
-      setImportProgress(`Syncing files to room (attempt ${attemptNumber}/10)...`);
-      if (reason) {
-        setGithubHint(reason);
-      }
-      retryTimer = setTimeout(() => {
-        setRetryTick((tick) => tick + 1);
-      }, delay);
-    };
-
-    try {
-      const raw = sessionStorage.getItem("syncdev_pending_import");
-      if (raw) {
-        const pending = JSON.parse(raw);
-        if (pending.roomId === roomId) {
-          const { files: newFiles, folders: newFolders, orderedFileIds, github: gh } = pending;
-          if (newFiles && typeof newFiles === "object" && Object.keys(newFiles).length) {
-            if (gh) {
-              sessionStorage.setItem(`syncdev_github_${roomId}`, JSON.stringify(gh));
-              setGithubMeta(gh);
-              setCommitBranch(gh.commitBranch || gh.defaultBranch || "");
-            }
-
-            if (!joined) {
-              scheduleRetry("Socket not connected - reconnecting...");
-            } else {
-              const sock = socketRef.current;
-              if (!sock || !sock.connected) {
-                scheduleRetry("Socket not connected - reconnecting...");
-              } else if (!mountingRef.current) {
-                // FIX: Prevent duplicate bulk-import emits while a prior import confirmation is still pending.
-                mountingRef.current = true;
-                setImportProgress(
-                  `Syncing files to room (attempt ${Math.min(importRetryCount.current + 1, 10)}/10)...`
-                );
-
-                const onImportComplete = (result) => {
-                  const preferredOpen = (orderedFileIds && orderedFileIds[0]) || null;
-                  loadFilesRef.current(newFiles, newFolders || {}, preferredOpen);
-                  sessionStorage.removeItem("syncdev_pending_import");
-                  importRetryCount.current = 0;
-                  mountingRef.current = false;
-                  setImportProgress(null);
-                  setGithubHint(
-                    result?.alreadyExists
-                      ? "GitHub repository is already mounted in this room."
-                      : `Imported ${Object.keys(newFiles).length} files from ${gh?.repoPath || "GitHub"}.`
-                  );
-                  cleanup();
-                };
-
-                const onImportError = (err) => {
-                  mountingRef.current = false;
-                  scheduleRetry(err?.msg || "Import did not complete.");
-                  cleanup();
-                };
-
-                const cleanup = () => {
-                  if (confirmationTimer) clearTimeout(confirmationTimer);
-                  sock.off("import-complete", onImportComplete);
-                  sock.off("import-error", onImportError);
-                };
-                cleanupListeners = cleanup;
-
-                sock.once("import-complete", onImportComplete);
-                sock.once("import-error", onImportError);
-                const CHUNK_SIZE = 100;
-                const fileEntries = Object.entries(newFiles);
-                const totalChunks = Math.ceil(fileEntries.length / CHUNK_SIZE);
-                if (totalChunks <= 1) {
-                  sock.emit("bulk-import", { roomId, files: newFiles, folders: newFolders || {} });
-                } else {
-                  const firstChunk = Object.fromEntries(fileEntries.slice(0, CHUNK_SIZE));
-                  sock.emit("bulk-import", { roomId, files: firstChunk, folders: newFolders || {} });
-                  for (let i = 1; i < totalChunks; i++) {
-                    const chunkFiles = Object.fromEntries(fileEntries.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE));
-                    setTimeout(() => {
-                      if (sock.connected) {
-                        sock.emit("bulk-import", { roomId, files: chunkFiles, folders: {} });
-                      }
-                    }, i * 150);
-                  }
-                }
-                confirmationTimer = setTimeout(
-                  () => onImportError({ msg: "Import confirmation timed out." }),
-                  30000
-                );
-              }
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.error("GitHub pending import", err);
-      mountingRef.current = false;
-      setImportProgress(null);
-      setGithubHint("GitHub import failed to resume. Try importing again.");
-    }
-
-    return () => {
-      if (confirmationTimer) clearTimeout(confirmationTimer);
-      if (retryTimer) clearTimeout(retryTimer);
-      cleanupListeners?.();
-    };
-  }, [joined, roomId, socketRef, retryTick]);
 
   const handleCommitPush = useCallback(async () => {
     if (!githubMeta) return;
@@ -274,7 +143,6 @@ export function useGitHub({ files, folders, roomId, socketRef, joined, loadFiles
   const handleImportGithub = useCallback(async (repoUrl, ref = "") => {
     const parsedRepo = parseGithubRepoInput(repoUrl);
     if (!parsedRepo) {
-      // FIX: Replace blocking browser alert with the existing inline GitHub hint UI.
       setImportProgress(null);
       setGithubHint("Invalid GitHub repo URL.");
       return;
@@ -282,50 +150,87 @@ export function useGitHub({ files, folders, roomId, socketRef, joined, loadFiles
     const { owner, repo, refFromUrl } = parsedRepo;
     const resolvedRef = ref.trim() || refFromUrl || undefined;
 
-    try {
-      // FIX: Surface the API fetch phase so users can distinguish network and socket work.
-      setImportProgress("Fetching repo from GitHub...");
-      setGithubHint("");
-      const data = await importGitHubRepo(owner, repo, resolvedRef);
-      importRetryCount.current = 0;
-      mountingRef.current = false;
-
-      sessionStorage.setItem(
-        "syncdev_pending_import",
-        JSON.stringify({
-          roomId,
-          type: "github",
-          files: data.files,
-          folders: data.folders,
-          orderedFileIds: data.orderedFileIds,
-          github: data.meta,
-        })
-      );
-
-      sessionStorage.setItem(`syncdev_github_${roomId}`, JSON.stringify(data.meta));
-      setGithubMeta(data.meta);
-      setCommitBranch(data.meta?.defaultBranch || "main");
-      setGithubHint(
-        `Importing ${Object.keys(data.files || {}).length} files from ${owner}/${repo}${resolvedRef ? `@${resolvedRef}` : ""}...`
-      );
-      setRetryTick((tick) => tick + 1);
-    } catch (error) {
+    const sock = socketRef.current;
+    if (!sock || !sock.connected || !joined) {
       setImportProgress(null);
-      // FIX: Distinguish session expiry from GitHub-specific errors.
-      const msg = String(error?.message || "");
-      if (msg.startsWith("GitHub auth error:") || msg.includes("GitHub access denied")) {
-        setGithubHint(msg);
-      } else if (
-        msg.includes("401") ||
-        msg.toLowerCase().includes("session expired") ||
-        (msg.toLowerCase().includes("sign in") && !msg.toLowerCase().includes("github"))
-      ) {
-        setGithubHint("Session expired — refresh the page to reconnect.");
-      } else {
-        setGithubHint("Import failed: " + msg);
-      }
+      setGithubHint("Socket not connected. Wait for the room to load and try again.");
+      return;
     }
-  }, [roomId]);
+
+    setImportProgress("Requesting import from server...");
+    setGithubHint("");
+
+    sock.off("import-progress");
+    sock.off("import-ready");
+    sock.off("import-error");
+    sock.off("file-page");
+    sock.off("file-page-error");
+
+    let totalFiles = 0;
+    let loadedFiles = 0;
+    let importMeta = null;
+
+    const fetchNextPage = (targetSocket, offset) => {
+      targetSocket.emit("get-file-page", { roomId, offset, limit: 100 });
+    };
+
+    sock.on("import-progress", ({ message }) => {
+      setImportProgress(message);
+    });
+
+    sock.once("import-error", (err) => {
+      sock.off("import-progress");
+      sock.off("import-ready");
+      sock.off("file-page");
+      sock.off("file-page-error");
+      setImportProgress(null);
+      setGithubHint("Import failed: " + (err?.msg || "Unknown error"));
+    });
+
+    sock.once("import-ready", ({ fileCount, meta }) => {
+      sock.off("import-progress");
+      totalFiles = fileCount;
+      importMeta = meta;
+      setGithubMeta(meta);
+      setCommitBranch(meta?.defaultBranch || "main");
+      try {
+        sessionStorage.setItem(`syncdev_github_${roomId}`, JSON.stringify(meta));
+      } catch {
+        /* ignore */
+      }
+      setImportProgress(`Loading ${fileCount} files...`);
+      fetchNextPage(sock, 0);
+    });
+
+    sock.on("file-page", ({ files: pageFiles, folders: pageFolders, offset, total }) => {
+      loadFilesRef.current(pageFiles, offset === 0 ? pageFolders : {}, null);
+      loadedFiles = offset + Object.keys(pageFiles).length;
+      totalFiles = total;
+
+      if (loadedFiles < totalFiles) {
+        setImportProgress(`Loading ${loadedFiles}/${totalFiles} files...`);
+        fetchNextPage(sock, loadedFiles);
+      } else {
+        sock.off("file-page");
+        sock.off("file-page-error");
+        sock.off("import-error");
+        setImportProgress(null);
+        setGithubHint(
+          `Imported ${totalFiles} files from ${importMeta?.repoPath || `${owner}/${repo}`}.`
+        );
+      }
+    });
+
+    sock.on("file-page-error", (err) => {
+      sock.off("file-page");
+      sock.off("file-page-error");
+      sock.off("import-error");
+      setImportProgress(null);
+      setGithubHint("Failed to load files: " + (err?.msg || "Unknown error"));
+    });
+
+    sock.emit("start-github-import", { roomId, owner, repo, ref: resolvedRef });
+  }, [roomId, joined, socketRef]);
 
   return {
     githubMeta,

@@ -161,13 +161,14 @@ router.post("/import", authJwt, async (req, res) => {
       if (ok) {
         user = await User.findById(req.auth.user.id).select("+githubAccessToken +githubRefreshToken githubTokenExpiry githubId");
       } else {
-        // FIX: Do not reuse an expired GitHub token after refresh failure; fall back to anonymous public import only.
-        user.githubAccessToken = "";
+        return res.status(401).json({
+          msg: "Your GitHub session expired. Please reconnect your GitHub account from settings.",
+        });
       }
     }
 
     // FIX: Public repository imports should still work when this SyncDev account has no linked GitHub token.
-    const token = user?.githubAccessToken || "";
+    const token = user?.githubAccessToken || null;
     let payload;
     try {
       payload = await importRepoFromGitHub({ owner, repo, ref, token });

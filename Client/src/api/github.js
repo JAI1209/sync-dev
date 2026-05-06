@@ -11,7 +11,13 @@ export async function importGitHubRepo(owner, repo, ref) {
     if (res._sessionExpired) {
       throw new Error("Session expired (401).");
     }
-    const msg = data.msg || data.message || `Import failed (${res.status})`;
+    const msg =
+      data.msg || data.message ||
+      (res.status === 502 || res.status === 503
+        ? "Server is unreachable. Make sure the SyncDev server is running."
+        : res.status === 0
+          ? "Network error - check your internet connection."
+          : `Import failed (${res.status})`);
     throw new Error(msg);
   }
   return data;

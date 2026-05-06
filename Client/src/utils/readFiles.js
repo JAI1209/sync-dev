@@ -76,7 +76,7 @@ export async function readUploadedFiles(fileList) {
   }
   const toProcess = allFiles.slice(0, MAX_FILE_COUNT);
 
-  const slotResults = await Promise.all(toProcess.map(async (file, index) => {
+  const readSlot = async (file, index) => {
     const relativePath = file.webkitRelativePath || file.name;
     const pathParts    = relativePath.split('/').filter(Boolean);
     if (pathParts.length === 0) return { index, id: null };
@@ -105,7 +105,15 @@ export async function readUploadedFiles(fileList) {
     const id = uid();
     files[id] = { id, name: fileName, content, language: extToLanguage(fileName), parentId };
     return { index, id };
-  }));
+  };
+
+  const BATCH = 50;
+  const slotResults = [];
+  for (let i = 0; i < toProcess.length; i += BATCH) {
+    const batch = toProcess.slice(i, i + BATCH);
+    const results = await Promise.all(batch.map((file, j) => readSlot(file, i + j)));
+    slotResults.push(...results);
+  }
 
   const orderedFileIds = slotResults
     .filter((r) => r.id)
