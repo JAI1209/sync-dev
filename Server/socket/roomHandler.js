@@ -517,7 +517,7 @@ async function handleRunCode(io, socket, { roomId, command, language } = {}) {
     files[buildFilePath(file, room.folders || {})] = file.content || "";
   }
 
-  socket.emit("run-started", { roomId });
+  io.to(roomId).emit("run-started", { roomId });
 
   const runCommand = command || inferCommand(room, language);
   try {
@@ -618,7 +618,8 @@ async function handleStartTerminal(io, socket, { roomId, language } = {}) {
     try {
       const msg = JSON.parse(data.toString());
       if (msg.type === "ready") {
-        io.to(roomId).emit("terminal-ready", { roomId, previewUrl: `/preview/${roomId}/?token=${previewToken}` });
+        const SERVER_ORIGIN = process.env.PUBLIC_SERVER_URL || "http://localhost:3000";
+        io.to(roomId).emit("terminal-ready", { roomId, previewUrl: `${SERVER_ORIGIN}/preview/${roomId}/?token=${previewToken}` });
       } else if (msg.type === "output") {
         io.to(roomId).emit("terminal-output", { roomId, data: msg.data });
       } else if (msg.type === "exit") {
@@ -643,12 +644,29 @@ function handleTerminalResize(_io, _socket, { roomId, cols, rows } = {}) {
 }
 
 async function handleStopTerminal(io, _socket, { roomId } = {}) {
+  if (!roomId) return;
   const term = terminalSessions.get(roomId);
-  if (term?.ptyWs) term.ptyWs.close();
-  await fetch(`${EXEC_URL}/terminal/${encodeURIComponent(roomId)}`, {
-    method: "DELETE",
-    headers: { "x-internal-secret": EXEC_SECRET },
-  }).catch(() => {});
+
+  if (term?.ptyWs) {
+    await new Promise((resolve) => {
+      if (term.ptyWs.readyState === WebSocket.OPEN) {
+        term.ptyWs.once("close", resolve);
+        term.ptyWs.close();
+      } else {
+        resolve();
+      }
+    });
+  }
+
+  try {
+    await fetch(`${EXEC_URL}/terminal/${encodeURIComponent(roomId)}`, {
+      method: "DELETE",
+      headers: { "x-internal-secret": EXEC_SECRET },
+    });
+  } catch (err) {
+    console.error("[handleStopTerminal] DELETE failed:", err.message);
+  }
+
   terminalSessions.delete(roomId);
   io.to(roomId).emit("terminal-stopped", { roomId });
 }
@@ -773,7 +791,8 @@ function inferCommand(room = {}, language = "javascript") {
     case "typescript":
       return activePath ? `npx ts-node ${activePath}` : "npx ts-node index.ts";
     case "python":
-      return activePath ? `python3 ${activePath}` : "python3 main.py";
+      if (activePath) return `([ -f requirements.txt ] && pip install --user -q -r requirements.txt 2>&1); python3 ${activePath}`;
+      return "([ -f requirements.txt ] && pip install --user -q -r requirements.txt 2>&1); python3 main.py";
     case "java":
       return activePath ? `javac ${activePath} && java ${activePath.replace(/\.java$/i, "")}` : "javac  && java ";
     case "cpp":
@@ -790,6 +809,8 @@ function inferCommand(room = {}, language = "javascript") {
     case "shell":
     case "sh":
       return activePath ? `bash ${activePath}` : "bash run.sh";
+    case "html":
+      return `echo "__SYNCDEV_HTML_PREVIEW__:${activePath || "index.html"}"`;
     case "javascript":
     default:
       return activePath ? `node ${activePath}` : "node index.js";

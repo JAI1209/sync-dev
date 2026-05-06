@@ -42,13 +42,17 @@ app.post('/terminal/start', async (req, res) => {
 
     const image = language === 'python' ? 'syncdev-sandbox:python312' : 'syncdev-sandbox:node20';
 
+    let retries = 0;
+    const MAX_RETRIES = 10;
     while (true) {
+      if (retries++ > MAX_RETRIES) return res.status(500).json({ error: "Could not allocate ports after 10 attempts" });
       const ports = { 3000: await allocatePort(), 5173: await allocatePort(), 8000: await allocatePort(), 8080: await allocatePort() };
       try {
         const container = await pool.docker.createContainer({
           Image: image, Tty: true, AttachStdin: true, AttachStdout: true, AttachStderr: true, OpenStdin: true, Cmd: ['tail', '-f', '/dev/null'], WorkingDir: '/workspace',
           HostConfig: { Memory: 512 * 1024 * 1024, MemorySwap: 512 * 1024 * 1024, CpuQuota: 100000, CpuPeriod: 100000, NetworkMode: 'bridge', ReadonlyRootfs: false,
-            SecurityOpt: ['no-new-privileges'], CapDrop: ['ALL'], CapAdd: ['CHOWN', 'SETUID', 'SETGID'], PidsLimit: 256, AutoRemove: false,
+            SecurityOpt: ['no-new-privileges'], CapDrop: ['ALL'], CapAdd: ['CHOWN', 'SETUID', 'SETGID', 'NET_RAW'], PidsLimit: 256, AutoRemove: false,
+            Dns: ['8.8.8.8', '8.8.4.4'],
             PortBindings: { '3000/tcp': [{ HostPort: String(ports[3000]) }], '5173/tcp': [{ HostPort: String(ports[5173]) }], '8000/tcp': [{ HostPort: String(ports[8000]) }], '8080/tcp': [{ HostPort: String(ports[8080]) }] } },
           ExposedPorts: { '3000/tcp': {}, '5173/tcp': {}, '8000/tcp': {}, '8080/tcp': {} },
         });
@@ -58,10 +62,10 @@ app.post('/terminal/start', async (req, res) => {
         return res.json({ ok: true, ports, sessionId });
       } catch (err) {
         const message = String(err?.message || '').toLowerCase();
+        Object.values(ports).forEach((port) => releasePort(port));
         if (message.includes('port is already allocated') || message.includes('address already in use')) {
           continue;
         }
-        Object.values(ports).forEach((port) => releasePort(port));
         throw err;
       }
     }
@@ -119,35 +123,34 @@ prebuildImages().then(async () => {
           if (msg.type === 'init') {
             filesLoaded = true;
             await uploadFilesToContainer(session.container, msg.files || {});
-            if (msg.files && msg.files['package.json']) {
-              const installExec = await session.container.exec({
-                Cmd: ['sh', '-c', 'cd /workspace && npm install --prefer-offline 2>&1'],
-                AttachStdout: true,
-                AttachStderr: true,
-                WorkingDir: '/workspace',
-              });
-              const installStream = await installExec.start({ hijack: true, stdin: false });
-              installStream.on('data', (chunk) => {
-                if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'output', data: chunk.toString() }));
-              });
-              await new Promise((resolve) => installStream.on('end', resolve));
-            }
             const ptyProcess = pty.spawn('docker', ['exec', '-it', session.container.id, '/bin/bash'], { name: 'xterm-256color', cols: msg.cols || 120, rows: msg.rows || 30, env: { ...process.env, TERM: 'xterm-256color', HOME: '/workspace', PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' } });
             session.ptyProcess = ptyProcess;
             let readySent = false;
+            const PROMPT_RE = /\$\s*$/m;
             ptyProcess.onData((chunk) => {
-              if (!readySent) {
+              if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'output', data: chunk }));
+              if (!readySent && PROMPT_RE.test(chunk)) {
                 readySent = true;
                 if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'ready', ports: session.ports }));
               }
-              if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'output', data: chunk }));
             });
+            setTimeout(() => {
+              if (!readySent && ws.readyState === ws.OPEN) {
+                readySent = true;
+                ws.send(JSON.stringify({ type: 'ready', ports: session.ports }));
+              }
+            }, 10_000);
             ptyProcess.onExit(({ exitCode }) => { if (ws.readyState === ws.OPEN) { ws.send(JSON.stringify({ type: 'exit', code: exitCode })); ws.close(); } });
+            if (msg.files && msg.files['package.json']) {
+              setTimeout(() => {
+                ptyProcess.write('npm install\r');
+              }, 500);
+            }
             return;
           }
         } catch (err) { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'error', error: err.message })); }
       }
-      try { const msg = JSON.parse(data.toString()); if (msg.type === 'input') session.ptyProcess?.write(msg.data); else if (msg.type === 'resize') session.ptyProcess?.resize(msg.cols, msg.rows); }
+      try { const msg = JSON.parse(data.toString()); if (msg.type === 'input') session.ptyProcess?.write(msg.data); else if (msg.type === 'resize') session.ptyProcess?.resize(Math.max(1, msg.cols || 80), Math.max(1, msg.rows || 24)); }
       catch { session.ptyProcess?.write(data.toString()); }
     });
   });
