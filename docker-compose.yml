@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
     ports:
       - "4000:4000"
-      - "3001-3999:3001-3999"
+      - "20000-20999:20000-20999"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:

@@ -67,7 +67,7 @@ app.use("/preview/:roomId", (req, res, next) => {
   if (!port) return res.status(503).send("Preview not ready");
 
   createProxyMiddleware({
-    target: `http://localhost:${port}`,
+    target: `http://${new URL(process.env.EXEC_SERVICE_URL || "http://localhost:4000").hostname}:${port}`,
     changeOrigin: true,
     ws: true,
     pathRewrite: { [`^/preview/${roomId}`]: "" },

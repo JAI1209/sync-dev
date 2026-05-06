@@ -45,11 +45,14 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
   }, [roomId]);
 
   useEffect(() => {
-    termRef.current?.setOption("theme", {
-      background: isDark ? "#050b12" : "#ffffff",
-      foreground: isDark ? "#d4d4d4" : "#1e1e1e",
-      cursor: isDark ? "#ffffff" : "#000000",
-    });
+    if (!termRef.current) return;
+    termRef.current.options = {
+      theme: {
+        background: isDark ? "#050b12" : "#ffffff",
+        foreground: isDark ? "#d4d4d4" : "#1e1e1e",
+        cursor: isDark ? "#ffffff" : "#000000",
+      },
+    };
   }, [isDark]);
 
   useEffect(() => {
@@ -105,7 +108,15 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
     const webMode = isWebProject(files);
     const htmlMode = !webMode && Object.keys(files || {}).some((f) => f.endsWith(".html"));
 
-    if (running && webMode) { socketRef.current?.emit("stop-terminal", { roomId }); return; }
+    if (running) {
+      if (webMode) {
+        socketRef.current?.emit("stop-terminal", { roomId });
+      } else {
+        socketRef.current?.emit("kill-run", { roomId });
+        setRunning(false);
+      }
+      return;
+    }
 
     termRef.current?.clear();
     setRunning(true);
@@ -120,7 +131,7 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
     }
   };
 
-  return <div className="run-terminal"><div className="run-terminal__toolbar"><button className="run-terminal__btn run-terminal__btn--primary" onClick={onRunClick}>{running && !scriptMode ? "Stop" : "Run"}</button>
+  return <div className="run-terminal"><div className="run-terminal__toolbar"><button className="run-terminal__btn run-terminal__btn--primary" onClick={onRunClick}>{running ? "Stop" : "Run"}</button>
     <select className="run-terminal__select" value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value)}>{LANGUAGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</select></div>
     <div className="run-terminal__xterm-host" ref={hostRef} />
     {!scriptMode && previewUrl && previewOpen && <div className="run-terminal__preview"><div className="run-terminal__preview-bar"><span className="run-terminal__preview-url">{previewUrl}</span><button onClick={() => setPreviewOpen(false)}>Hide preview</button><button onClick={() => window.open(previewUrl, "_blank")}>Open in tab</button></div><iframe src={previewUrl} className="run-terminal__preview-frame" title="App preview" sandbox="allow-scripts allow-same-origin allow-forms" /></div>}
