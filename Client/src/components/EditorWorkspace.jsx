@@ -145,6 +145,7 @@ export default function EditorWorkspace({
                   roomId={roomId}
                   language={activeFile?.language}
                   fileName={activeFile?.name}
+                  files={files}
                   userRole={userRole}
                   disabled={!joined}
                 />
