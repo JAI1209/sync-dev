@@ -27,6 +27,11 @@ export default defineConfig(({ mode }) => {
           target: apiTarget,
           changeOrigin: true,
         },
+        '/preview': {
+          target: apiTarget,
+          changeOrigin: true,
+          ws: true,
+        },
       },
     },
   }
