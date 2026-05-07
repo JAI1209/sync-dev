@@ -66,14 +66,16 @@ async function allocatePort() {
   throw new Error("No free ports in range 20000–20999");
 }
 
-async function releasePort(port) {
+function releasePort(port) {
   const numericPort = Number(port);
-  const redisReady = await ensureRedisReady();
-  if (redisReady) {
-    await redis.srem(PORT_KEY, numericPort);
-    return;
-  }
-  allocatedPorts.delete(numericPort);
+  allocatedPorts.delete(numericPort);          // always clean local set immediately
+  ensureRedisReady().then((redisReady) => {
+    if (redisReady) {
+      redis.srem(PORT_KEY, numericPort).catch((err) => {
+        console.warn("[portAllocator] Failed to release port from Redis:", err.message);
+      });
+    }
+  });
 }
 
 module.exports = { allocatePort, releasePort };

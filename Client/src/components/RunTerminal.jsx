@@ -89,6 +89,10 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
     const ex = ({ roomId: r, code }) => { if (r === roomId) { termRef.current?.writeln(`\r\n\x1b[33m[exited with code ${code}]\x1b[0m`); setRunning(false); } };
     const runStarted = ({ roomId: r }) => { if (r === roomId) setRunning(true); };
     const runFinished = ({ roomId: r }) => { if (r === roomId) setRunning(false); };
+    const termErr = ({ msg }) => {
+      termRef.current?.writeln(`\r\n\x1b[31m[Terminal Error] ${msg || "Unknown error"}\x1b[0m`);
+      setRunning(false);
+    };
     const runOut = ({ type, payload }) => {
       const term = termRef.current;
       if (!term) return;
@@ -114,9 +118,11 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
     const stopped = ({ roomId: r }) => { if (r !== roomId) return; setRunning(false); setPreviewUrl(""); setPreviewOpen(false); };
 
     s.on("terminal-ready", ready); s.on("terminal-output", out); s.on("terminal-exit", ex); s.on("terminal-stopped", stopped); s.on("run-output", runOut); s.on("run-started", runStarted); s.on("run-finished", runFinished);
+    s.on("operation-error", termErr);
     return () => {
       setSocketConnected(false);
       s.off("terminal-ready", ready); s.off("terminal-output", out); s.off("terminal-exit", ex); s.off("terminal-stopped", stopped); s.off("run-output", runOut); s.off("run-started", runStarted); s.off("run-finished", runFinished);
+      s.off("operation-error", termErr);
     };
   }, [roomId, socketRef, socketRef.current]);
 
