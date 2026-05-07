@@ -595,6 +595,10 @@ async function handleStartTerminal(io, socket, { roomId, language } = {}) {
     terminalSessions.delete(roomId);
   }
 
+  if (!socket.userId) {
+    socket.emit("operation-error", { msg: "Authentication required to start a terminal" });
+    return;
+  }
   const rateLimitKey = `terminal:ratelimit:${socket.userId}`;
   const ready = await ensureRedisConnection();
   if (ready) {
@@ -625,11 +629,12 @@ async function handleStartTerminal(io, socket, { roomId, language } = {}) {
   ptyWs.on("error", (err) => {
     console.error("[handleStartTerminal] ptyWs error:", err.message);
     terminalSessions.delete(roomId);
+    socket.emit("operation-error", { msg: "Terminal connection failed: " + err.message });
   });
   const previewToken = require("crypto").randomBytes(16).toString("hex");
-  terminalSessions.set(roomId, { ports, ptyWs, previewToken });
 
   ptyWs.on("open", async () => {
+    terminalSessions.set(roomId, { ports, ptyWs, previewToken });   // <-- moved here
     const room = await roomService.getRoom(roomId);
     const files = {};
     for (const file of Object.values(room?.files || {})) {
@@ -760,6 +765,13 @@ async function handleTerminateRoom(io, socket, { roomId } = {}) {
   }
 
   await roomService.destroyRoom(roomId);
+
+  // Forcibly remove all sockets from the room channel so stale subscriptions cannot receive future events.
+  const socketsInRoom = await io.in(roomId).fetchSockets();
+  for (const s of socketsInRoom) {
+    s.leave(roomId);
+  }
+
   io.to(roomId).emit("room-terminated", { roomId });
 }
 

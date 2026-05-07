@@ -123,7 +123,7 @@ prebuildImages().then(async () => {
           if (msg.type === 'init') {
             filesLoaded = true;
             await uploadFilesToContainer(session.container, msg.files || {});
-            const ptyProcess = pty.spawn('docker', ['exec', '-it', session.container.id, '/bin/bash'], { name: 'xterm-256color', cols: msg.cols || 120, rows: msg.rows || 30, env: { ...process.env, TERM: 'xterm-256color', HOME: '/workspace', PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' } });
+            const ptyProcess = pty.spawn('docker', ['exec', '-i', session.container.id, '/bin/bash'], { name: 'xterm-256color', cols: msg.cols || 120, rows: msg.rows || 30, env: { ...process.env, TERM: 'xterm-256color', HOME: '/workspace', PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' } });
             session.ptyProcess = ptyProcess;
             let readySent = false;
             const PROMPT_RE = /\$\s*$/m;
