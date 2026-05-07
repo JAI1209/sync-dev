@@ -80,7 +80,11 @@ export function useMonacoModels({
       if (!model || model.isDisposed()) return;
 
       const nextContent = file?.content || "";
-      if (model.getValue() !== nextContent) {
+      const isRemoteUpdate = pendingRemoteUpdates?.current?.has(id);
+      const isActiveModel =
+        editorRef.current?.getModel() === model && !editorRef.current?._isDisposed;
+      // Only force-set if this is a remote peer update. Never overwrite while the user is typing.
+      if (model.getValue() !== nextContent && (isRemoteUpdate || !isActiveModel)) {
         model.setValue(nextContent);
       }
 

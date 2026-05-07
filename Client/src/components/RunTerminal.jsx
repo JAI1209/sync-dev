@@ -8,11 +8,13 @@ import { useTheme } from "../context/ThemeContext.jsx";
 const LANGUAGE_OPTIONS = [{ value: "javascript", label: "Node.js" }, { value: "typescript", label: "TypeScript" }, { value: "python", label: "Python" }, { value: "shell", label: "Shell" }];
 const normalizeLanguage = (v) => (v === "tsx" ? "typescript" : v || "javascript");
 const isWebProject = (files = {}) =>
-  Object.entries(files).some(
-    ([name, content]) =>
-      name?.split("/").pop() === "package.json" &&
-      typeof content === "string" &&
-      ["react", "vite", "next", "express"].some((dep) => content.toLowerCase().includes(dep))
+  Object.values(files).some(
+    (file) =>
+      file?.name === "package.json" &&
+      typeof file.content === "string" &&
+      ["react", "vite", "next", "express"].some((dep) =>
+        file.content.toLowerCase().includes(dep)
+      )
   );
 
 export default function RunTerminal({ socketRef, roomId, language, fileName, files }) {
@@ -98,7 +100,10 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
       if (!term) return;
       if (typeof payload === "string" && payload.includes("__SYNCDEV_HTML_PREVIEW__:")) {
         const filePath = payload.split("__SYNCDEV_HTML_PREVIEW__:")[1]?.trim();
-        const fileContent = filesRef.current?.[filePath] || filesRef.current?.["index.html"] || "";
+        const fileContent =
+          Object.values(filesRef.current || {}).find((f) => f?.name === filePath)?.content ||
+          Object.values(filesRef.current || {}).find((f) => f?.name === "index.html")?.content ||
+          "";
         // Revoke previous blob URL if it exists
         setPreviewUrl((prev) => {
           if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
@@ -124,7 +129,7 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
       s.off("terminal-ready", ready); s.off("terminal-output", out); s.off("terminal-exit", ex); s.off("terminal-stopped", stopped); s.off("run-output", runOut); s.off("run-started", runStarted); s.off("run-finished", runFinished);
       s.off("operation-error", termErr);
     };
-  }, [roomId, socketRef, socketRef.current]);
+  }, [roomId, socketRef]);
 
 
   useEffect(() => {
@@ -138,7 +143,7 @@ export default function RunTerminal({ socketRef, roomId, language, fileName, fil
 
   const onRunClick = () => {
     const webMode = isWebProject(files);
-    const htmlMode = !webMode && Object.keys(files || {}).some((f) => f.endsWith(".html"));
+    const htmlMode = !webMode && Object.values(files || {}).some((f) => f?.name?.endsWith(".html"));
 
     if (running) {
       if (webMode) {
