@@ -70,7 +70,7 @@ export default function EditorHeader({
       <div className="editor-header__left">
         <div className="editor-brand">
           <span className="logo">SyncDev</span>
-          <button type="button" className="room-badge" onClick={handleCopyRoom}>
+          <button type="button" className="room-badge button button--ghost" onClick={handleCopyRoom}>
             {roomId} {copied && "OK"}
           </button>
         </div>
@@ -82,7 +82,7 @@ export default function EditorHeader({
         {userRole !== "owner" && (
           <button
             type="button"
-            className="btn btn--danger"
+            className="button button--danger"
             onClick={onLeaveRoom}
             title="Leave this collaborative session"
           >
@@ -94,7 +94,7 @@ export default function EditorHeader({
           <>
             <button
               type="button"
-              className="btn"
+              className="button button--secondary"
               onClick={() => setShowImportForm((open) => !open)}
               disabled={githubBusy}
             >
@@ -104,7 +104,7 @@ export default function EditorHeader({
             {showImportForm && (
               <form className="editor-header__import-form" onKeyDown={handleImportFormKeyDown} onSubmit={handleImportSubmit}>
                 <input
-                  className="input-small input-small--repo"
+                  className="input input-small input-small--repo"
                   placeholder="https://github.com/owner/repo"
                   value={repoUrl}
                   onChange={(event) => setRepoUrl(event.target.value)}
@@ -112,12 +112,12 @@ export default function EditorHeader({
                   autoFocus
                 />
                 <input
-                  className="input-small input-small--ref"
+                  className="input input-small input-small--ref"
                   placeholder="branch/ref optional"
                   value={repoRef}
                   onChange={(event) => setRepoRef(event.target.value)}
                 />
-                <button type="submit" className="btn btn--primary" disabled={githubBusy || !repoUrl.trim()}>
+                <button type="submit" className="button button--primary" disabled={githubBusy || !repoUrl.trim()}>
                   Import repo
                 </button>
               </form>
@@ -126,45 +126,45 @@ export default function EditorHeader({
             {githubMeta && canPush && (
               <>
                 <input
-                  className="input-small"
+                  className="input input-small"
                   placeholder="Branch"
                   value={commitBranch}
                   onChange={(event) => setCommitBranch(event.target.value)}
                 />
                 <input
-                  className="input-small"
+                  className="input input-small"
                   placeholder="Commit message"
                   value={commitMessage}
                   onChange={(event) => setCommitMessage(event.target.value)}
                 />
-                <button type="button" className="btn" onClick={handleCommitPush} disabled={githubBusy}>
+                <button type="button" className="button button--secondary" onClick={handleCommitPush} disabled={githubBusy}>
                   {githubBusy ? "Working..." : "Push"}
                 </button>
               </>
             )}
 
-            <button type="button" className="btn" onClick={handleDownloadZip}>Export ZIP</button>
+            <button type="button" className="button button--secondary" onClick={handleDownloadZip}>Export ZIP</button>
           </>
         )}
 
         {canInvite && (
-          <button type="button" className="btn" onClick={handleShareInvite}>
+          <button type="button" className="button button--secondary" onClick={handleShareInvite}>
             {inviteCopied ? "Copied invite link!" : "Share invite"}
           </button>
         )}
 
-        <button type="button" className="btn" onClick={() => setTerminalOpen((value) => !value)}>
+        <button type="button" className="button button--secondary" onClick={() => setTerminalOpen((value) => !value)}>
           {terminalOpen ? "Hide Terminal" : "Show Terminal"}
         </button>
 
-        <span className={`socket-status socket-status--${reconnecting ? "reconnecting" : socketStatus}`}>
+        <span className={`status-pill status-pill--neutral socket-status socket-status--${reconnecting ? "reconnecting" : socketStatus}`}>
           {/* FIX: Header status uses an explicit colored dot instead of text-only state. */}
           <span className={`status-dot status-dot--${reconnecting ? "reconnecting" : socketStatus}`} />
           {reconnecting ? "reconnecting" : socketStatus}
         </span>
 
         {socketStatus !== "connected" && (
-          <button type="button" className="btn btn--primary" onClick={handleReconnectSocket} disabled={reconnecting}>
+          <button type="button" className="button button--primary" onClick={handleReconnectSocket} disabled={reconnecting}>
             {reconnecting ? "Connecting..." : "Reconnect"}
           </button>
         )}

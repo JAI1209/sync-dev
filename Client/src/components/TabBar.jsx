@@ -19,7 +19,7 @@ export default function TabBar({ files, openTabs, activeFileId, onActivate, onCl
   if (!openTabs.length) return null;
 
   return (
-    <div className="tab-bar">
+    <div className="tab-bar" role="tablist">
       {openTabs.map((id) => {
         const file   = files[id];
         const name   = file?.name || id;
@@ -31,7 +31,7 @@ export default function TabBar({ files, openTabs, activeFileId, onActivate, onCl
         return (
           <div
             key={id}
-            className={`tab ${active ? "tab--active" : ""}`}
+            className={`tab ${active ? "tab--active" : ""}`} role="tab"
             onClick={() => onActivate(id)}
             title={name}
           >

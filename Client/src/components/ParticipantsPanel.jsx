@@ -36,7 +36,7 @@ export default function ParticipantsPanel({
             onMouseEnter={() => setHoveredUser(user.socketId)}
             onMouseLeave={() => setHoveredUser(null)}
           >
-            <div className={`participant-avatar ${user.username === username ? "you" : ""}`}>
+            <div className={`participant-avatar ${user.username === username ? "you" : ""}`} style={{ backgroundColor: `hsl(${(user.username||"").split("").reduce((a,c)=>a+c.charCodeAt(0),0)%360} 65% 45%)` }}>
               {user.username[0]?.toUpperCase()}
             </div>
             <div className="participant-info">

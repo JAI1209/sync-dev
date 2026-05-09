@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
 function IconFolder({ open }) {
-  return <span className="ft-icon ft-icon--folder">{open ? "v" : ">"}</span>;
+  return <span className="ft-icon ft-icon--folder"><span className={`ft-chevron ${open ? "ft-chevron--open" : ""}`} /></span>;
 }
 
 function IconFile({ name }) {
@@ -337,7 +337,7 @@ export default function FileTree({
             disabled={!canEdit}
             onClick={() => setCreating({ parentId: null, type: "file" })}
           >
-            +F
+            📄
           </button>
           <button
             className="ft-header__btn"
@@ -345,7 +345,7 @@ export default function FileTree({
             disabled={!canEdit}
             onClick={() => setCreating({ parentId: null, type: "folder" })}
           >
-            +D
+            📁
           </button>
         </div>
       </div>
@@ -373,7 +373,7 @@ export default function FileTree({
               <>
                 No files yet.
                 <br />
-                Click +F to create one.
+                Click 📄 to create one.
               </>
             ) : (
               "No files available."
